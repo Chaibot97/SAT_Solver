@@ -1,5 +1,7 @@
 #cython: language_level=3
 
+import random
+
 class CNF:
     def __init__(self, n_vars, cs0):
         self.vs = set(range(1, n_vars+1))
@@ -9,7 +11,7 @@ class CNF:
 
     def __str__(self):
         meta = "p cnf {} {}".format(len(self.vs), len(self.cs0))
-        return "\n".join([meta] + [str(c) + ' 0' for c in self.cs0])
+        return "\n".join([meta] + [str(c) + " 0" for c in self.cs0])
     
     def free_vars(self, m):
         return [v for v in self.vs if v not in m]
@@ -18,7 +20,7 @@ class CNF:
         return all((c.modeled_by(m) for c in self.cs))
     
     def unit_prop(self, m, l, c):
-        m.commit(l) # declare literal l is true in model m
+        m.commit(l) # declare literal l to be true in model m
         c.trivial = True
         self.cs.remove(c)
     
@@ -26,8 +28,18 @@ class CNF:
         m = Model()
         while True:
             free = self.free_vars(m)
-            if len(free) > 0:
-                # greedily search for unit-propagation variables
+            sat = self.modeled_by(m)
+            # check if we're done
+            if len(free) == 0:
+                if sat:
+                    return True
+                if len(m.dv) == 0 and not sat:
+                    return False
+            # we either need backtracking, or can branch on a new variable
+            if len(m.dv) > 0 and not sat:
+                m.backtrack()
+            else:
+                assert(len(free)) > 0 # by logic, this is the only case left
                 up = list()
                 for v in free:
                     for c in self.contains[v]:
@@ -39,22 +51,10 @@ class CNF:
                 else:
                     for v, c in up:
                         self.unit_prop(m, c[v], c)
-            # no more free variables 
-            else:
-                while True:
-                    # all clauses are modeled by m ==> SAT
-                    if all(map(lambda c: c.modeled_by(m), self.cs)):
-                        return True
-                    # some clause is not modeled
-                    # no more decision variables left ==> UNSAT
-                    if len(m.dv) == 0:
-                        return False
-                    m.backtrack() # backtrack the last decision variable
 
 
 class Literal:
     def __init__(self, n):
-        assert(n != 0)
         self.n = n
     
     def var(self):
@@ -88,7 +88,7 @@ class Clause:
             self.ls.add(Literal(n))
 
     def __str__(self):
-        return ' '.join([str(l) for l in self.ls])
+        return " ".join([str(l) for l in self.ls])
     
     def __contains__(self, l):
         if type(l) == Literal:
