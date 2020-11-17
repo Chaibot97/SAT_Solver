@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-import dpll
+from dpll import CNF
 
 
 def parseArg():
@@ -31,7 +31,7 @@ def parse_input(f):
 if __name__ == '__main__':
     args = parseArg().parse_args()
     n_vars, cs = parse_input(args.infile)
-    cnf = dpll.CNF(int(n_vars), [dpll.Clause(vs) for vs in cs])
+    cnf = CNF(int(n_vars), cs)
     if cnf.dpll():
         print("sat")
     else:
