@@ -1,5 +1,5 @@
 #cython: language_level=3
-# cython: profile=True
+# cython: profile=False
 
 cdef class CNF:
     cdef set vs
@@ -74,20 +74,15 @@ cdef class CNF:
 cdef class Literal:
     cdef:
         int n
-        int a
+        readonly int var
+        bint is_pos
+        bint is_neg
     
     def __init__(self, int n):
         self.n = n
-        self.a = abs(n)
-    
-    cpdef int var(self):
-        return self.a
-    
-    cpdef bint is_pos(self):
-        return self.n > 0
-    
-    cpdef bint is_neg(self):
-        return self.n < 0
+        self.var = abs(n)
+        self.is_pos = n > 0
+        self.is_neg = n < 0
 
     def __str__(self):
         return str(self.n)
@@ -145,7 +140,7 @@ cdef class Clause:
     def modeled_by_modulo(self, Model m, int v):
         cdef Literal l
         """Determine if clause c could be modeled by m if variable v were absent"""
-        return any((l not in m or m[l] for l in self.ls if l.var() != v))
+        return any((l not in m or m[l] for l in self.ls if l.var != v))
 
 
 cdef class Model:
@@ -159,17 +154,17 @@ cdef class Model:
     
     def __contains__(self, l):
         if type(l) == Literal:
-            return l.var() in self.alpha
+            return l.var in self.alpha
         else: # otherwise, l is a variable
             return l in self.alpha
     
     def __getitem__(self, Literal l):
         """Return the truth value of literal l under this model"""
-        return l.is_neg() ^ self.alpha[l.var()]
+        return l.is_neg ^ self.alpha[l.var]
     
     def commit(self, Literal l):
         """Set literal l to true"""
-        self.alpha[l.var()] = l.is_pos()
+        self.alpha[l.var] = l.is_pos
     
     def guess(self, int v):
         self.alpha[v] = True # guess True first
