@@ -8,7 +8,7 @@ s=0
 w=0
 
 for i in `cat name1`; do
-		python dpll.py ../../bench1/sat/$i > results 2>&1
+		./dpll ../../bench1/sat/$i > results 2>&1
 		if (grep -q "[^n]sat" results) || (grep -q "^sat" results); then
 		  echo "$i Pass!"
 			let "c+=1"
@@ -23,7 +23,7 @@ for i in `cat name1`; do
 done
 
 for i in `cat name2`; do
-		python dpll.py ../../bench1/unsat/$i > results 2>&1
+		./dpll ../../bench1/unsat/$i > results 2>&1
 		if grep -q "unsat" results; then
 		  echo "$i Pass!"
 			let "c+=1"

@@ -1,18 +1,4 @@
-#!/usr/bin/env python3
-
-import argparse
-import sys
-
-
-def parseArg():
-    """
-    CMD argument parsing
-    :return: the parser
-    """
-    parser = argparse.ArgumentParser(description='SAT solver')
-    parser.add_argument('infile', nargs='?', type=argparse.FileType('r'))
-    return parser
-
+#cython: language_level=3
 
 class CNF:
     def __init__(self, n_vars, cs0):
@@ -39,35 +25,31 @@ class CNF:
     def dpll(self):
         m = Model()
         while True:
-            v_free = self.free_vars(m)
-            if len(v_free) > 0:
+            free = self.free_vars(m)
+            if len(free) > 0:
                 # greedily search for unit-propagation variables
-                lu = list()
-                for v in v_free:
+                up = list()
+                for v in free:
                     for c in self.contains[v]:
                         if not c.modeled_by_modulo(m, v):
-                            lu.append((v, c))
+                            up.append((v, c))
                             break
-                if len(lu) == 0:
-                    m.guess(v_free[0]) # mark the first free var as decision var
+                if len(up) == 0:
+                    m.guess(free[0]) # mark the first free var as decision var
                 else:
-                    for v, c in lu:
+                    for v, c in up:
                         self.unit_prop(m, c[v], c)
             # no more free variables 
             else:
                 while True:
-                    try:
-                        # find a clause not modeled by m
-                        c = next(filter(lambda c: not c.modeled_by(m), self.cs))
-                    except StopIteration: # all clauses are modeled by m ==> SAT
-                        sat = True
-                        break
+                    # all clauses are modeled by m ==> SAT
+                    if all(map(lambda c: c.modeled_by(m), self.cs)):
+                        return True
                     # some clause is not modeled
-                    if len(m.dv) == 0: # no more decision variables left ==> UNSAT
-                        sat = False
-                        break
+                    # no more decision variables left ==> UNSAT
+                    if len(m.dv) == 0:
+                        return False
                     m.backtrack() # backtrack the last decision variable
-                return sat
 
 
 class Literal:
@@ -169,32 +151,3 @@ class Model:
                 for v in self.alpha])
         else:
             return "(empty model)"
-
-
-def parse_input(f):
-    cs = []
-    for line in f:
-        line = line.strip()
-        if line[0] == 'c':
-            pass
-        elif line[0] == 'p':
-            _, _, n_vars, _ = line.split()
-        else:
-            vs = [int(v) for v in line.split() if v != '0']
-            cs.append(Clause(vs))
-    return CNF(int(n_vars), cs)
-
-
-def run():
-    args = parseArg().parse_args()
-    cnf = parse_input(args.infile)
-    # print(cnf)
-    return cnf
-
-
-if __name__ == '__main__':
-    cnf = run()
-    if cnf.dpll():
-        print("sat")
-    else:
-        print("unsat")

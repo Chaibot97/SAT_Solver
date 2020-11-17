@@ -8,7 +8,7 @@ s=0
 w=0
 
 for i in `cat name5`; do
-		python dpll.py ../../bench3/$i > results 2>&1
+		./dpll ../../bench3/$i > results 2>&1
 		if grep -q "unsat" results; then
 		  echo "$i Pass!"
 			let "c+=1"
