@@ -15,7 +15,7 @@ def parseArg():
 
 
 def parse_input(f):
-    cs = []
+    nss = []
     for line in f:
         line = line.strip()
         if line[0] == 'c':
@@ -23,15 +23,15 @@ def parse_input(f):
         elif line[0] == 'p':
             _, _, n_vars, _ = line.split()
         else:
-            vs = [int(v) for v in line.split() if v != '0']
-            cs.append(vs)
-    return n_vars, cs
+            ns = [int(n) for n in line.split() if n != '0']
+            nss.append(ns)
+    return int(n_vars), nss
 
 
 if __name__ == '__main__':
     args = parseArg().parse_args()
-    n_vars, cs = parse_input(args.infile)
-    cnf = CNF(int(n_vars), cs)
+    n_vars, nss = parse_input(args.infile)
+    cnf = CNF(n_vars, nss)
     if cnf.dpll():
         print("sat")
     else:
