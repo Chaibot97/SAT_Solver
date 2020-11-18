@@ -7,13 +7,13 @@ cdef class CNF:
     cdef set cs
     cdef dict contains
 
-    def __init__(self, int n_vars, list vss):
+    def __init__(self, n_vars, nss):
         cdef:
             list vs
             Clause c
             int v
         self.vs = set(range(1, n_vars+1))
-        self.cs0 = [Clause(vs) for vs in vss] # includes trivial clauses
+        self.cs0 = [Clause(ns) for ns in nss] # includes trivial clauses
         self.cs = set(c for c in self.cs0 if not c.trivial) # excludes trivial clauses
         self.contains = {v: set([c for c in self.cs if v in c]) for v in self.vs} # clauses that contain v
 
@@ -22,28 +22,30 @@ cdef class CNF:
         return "\n".join([meta] + [str(c) + " 0" for c in self.cs0])
     
     cdef list free_vars(self, Model m):
+        """Return the list of free variables (those that are not in model m)"""
         cdef int v
         return [v for v in self.vs if v not in m]
     
     cdef bint modeled_by(self, Model m):
+        """Check if the CNF formula is modeled by m"""
         cdef Clause c
         return all((c.modeled_by(m) for c in self.cs))
     
     cdef unit_prop(self, Model m, Literal l, Clause c):
+        """Do unit-propagation on literal l in clause c"""
         m.commit(l) # declare literal l to be true in model m
         c.trivial = True
         self.cs.remove(c)
     
     def dpll(self):
         cdef:
-            list free
-            bint sat
-            list up
             Model m = Model()
-            Clause c
+            bint sat # is the current CNF formula satisfied by model m?
+            list free # free variables
+            list up # unit-prop variables
             int v
+            Clause c
 
-        # m = Model()
         while True:
             free = self.free_vars(m)
             sat = self.modeled_by(m)
@@ -56,9 +58,8 @@ cdef class CNF:
             # if not done, we either need to backtrack, or can branch on a free variable
             if len(m.dv) > 0 and not sat:
                 m.backtrack()
-            else:
-                # assert(len(free)) > 0 # by logic, this is the only case left
-                up = list()
+            else: # otherwise, there has to be a free var (by logic)
+                up = list() # unit-prop var
                 for v in free:
                     for c in self.contains[v]:
                         if not c.modeled_by_modulo(m, v):
@@ -73,10 +74,10 @@ cdef class CNF:
 
 cdef class Literal:
     cdef:
-        int n
-        readonly int var
+        readonly int var # positive integer representing the variable name
         bint is_pos
         bint is_neg
+        int n # +var or -var
     
     def __init__(self, int n):
         self.n = n
@@ -96,11 +97,11 @@ cdef class Literal:
 
 cdef class Clause:
     cdef:
-        set ls
         readonly bint trivial
+        set ls
 
     def __init__(self, list ns):
-        """Initialize a clause from a list of integers representing literals"""
+        """ns - a list of integers representing literals"""
         cdef int n
         self.ls = set() # literals
         self.trivial = False
@@ -138,19 +139,19 @@ cdef class Clause:
         return any((l not in m or m[l] for l in self.ls))
     
     def modeled_by_modulo(self, Model m, int v):
-        cdef Literal l
         """Determine if clause c could be modeled by m if variable v were absent"""
+        cdef Literal l
         return any((l not in m or m[l] for l in self.ls if l.var != v))
 
 
 cdef class Model:
     cdef:
-        readonly list dv
-        dict alpha
+        readonly list dv # decision variables
+        dict alpha # assignment function
 
     def __init__(self):
-        self.dv = list() # decision variables
-        self.alpha = dict() # assignment function
+        self.dv = list()
+        self.alpha = dict()
     
     def __contains__(self, l):
         if type(l) == Literal:
@@ -167,10 +168,12 @@ cdef class Model:
         self.alpha[l.var] = l.is_pos
     
     def guess(self, int v):
-        self.alpha[v] = True # guess True first
+        """Mark v as decison variable, and guess it's True"""
+        self.alpha[v] = True
         self.dv.append(v)
     
     def backtrack(self):
+        """Backtrack the latest decision variable and take the other branch"""
         cdef int v = self.dv.pop() # v becomes decided
         self.alpha[v] = not self.alpha[v] # guess the remaining option
         return v
