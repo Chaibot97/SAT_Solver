@@ -4,50 +4,69 @@
 from collections import defaultdict
 from heapq import heappop, heappush
 from random import choice, seed
+import logging as logging
+
+LEVEL = logging.INFO
+LOG_FILE = 'dpll.log'
+logging.basicConfig(level=LEVEL, filename=LOG_FILE, filemode='w', format='%(message)s')
 
 # seed(10)
 
 RESTART_MULTIPLIER = 1
+
+clause_counter = 0
+
+def INFO(dl, msg):
+    logging.info(' ' * dl + str(msg))
+
+def DEBUG(dl, msg):
+    logging.debug(' ' * dl + str(msg).replace('\n', '\n' + ' ' * dl))
 
 class CDCL:
     def __init__(self, n_vars, nss):
         self.xs = set()
         self.cs0 = list() # includes trivial clauses
         self.cs = list() # non-trivial clauses
-        self.watched = defaultdict(list) # map literal l to clauses that are watching l
-        self.watches = dict() # map clause l to the two literals being watching
-        self.pending = list() # literals for which we need to check watchers during unit-prop
+        self.watched = dict() # map literal l to clauses that are watching l
+        self.pending = list() # literals to be assigned true
+        
         # restart using Knuth's reluctant doubling sequence
         self.conflict_count = 0
-        self.reluctant = (1,1)
-        self.reluctant_next = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
+        self.restart_pair = (1, 1)
+        self.reluctant_doubling = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
+        
+        # Process clauses and variables
         for ns in nss:
             c = Clause(ns)
             self.cs0.append(c)
             if not c.trivial:
                 if len(c) == 1:
-                    heappush(self.pending, (0, c.get_only(), c))
+                    self.pending.append( (0, c.get_only(), c) )
                 else:
                     self.cs.append(c)
                     for x in c.xs():
                         self.xs.add(x)
 
         self.preprocess()
-
     
+
     def preprocess(self):
-        """Prepare watched literals"""
+        """Set up watched literals"""
         cs_trivial = list()
         for c in self.cs:
-            self.watches[c] = list()
             for l in c.start_watching():
-                self.watches[c].append(l)
+                if l not in self.watched:
+                    self.watched[l] = list()
                 self.watched[l].append(c)
     
+
     def run(self):
+        """Run CDCL. Return the model if SAT; otherwise return None"""
+        
         self.m = Model()
-        # decision level 0 is reserved for implied literals during the first
-        # unit prop (before making any decision)
+
+        # decision level 0 is reserved for literals implied during the first
+        # unit prop (before making any decision) due to singleton clauses
         self.dl = 0
         if self.unit_prop():
             return None # conflict without decision
@@ -58,11 +77,12 @@ class CDCL:
             if len(free) == 0:
                 break
             l = self.branch(free)
-            heappush(self.pending, (self.dl, l, None))
-            print("{} = {} @ {}".format(l.var, l.is_pos, self.dl))
-
+            self.pending.append( (self.dl, l, None) )
+            
             conflict = self.unit_prop()
-            # print(self.m)
+
+            DEBUG(self.dl, self.m)
+            
             if conflict:
                 self.conflict_count += 1
             while conflict:
@@ -71,66 +91,85 @@ class CDCL:
                     return None
                 else:
                     l = self.m.undo(beta)
+                    INFO(self.dl, "Backtrack to level {}, assert {}".format(beta, l))
                     self.dl = beta
                     if l: # take the other branch
                         self.dl = beta + 1
-                        heappush(self.pending, (self.dl, l, l))
+                        self.pending.append( (self.dl, l, l) )
                         conflict = self.unit_prop()
                     else: # both branches have been taken
                         conflict = True # forced backtrack
-                # print(self.m)
-            # print(self.m)
-            self.dl += 1
+                
+                DEBUG(self.dl, self.m)
+
             if self.should_restart():
                 self.restart()
+            else:
+                self.dl += 1
         assert(self.modeled_by())
         return self.m
 
     
     def watch_correct(self):
-        assert(all([c in self.watched[l] for (c, ls) in self.watches.items() for l in ls]))
-        assert(all([l in self.watches[c] for (l, cs) in self.watched.items() for c in cs]))
+        assert(all([c in self.watched[l] for c in self.cs for l in [c[0], c[1]]]))
+        assert(all([l in c[:2] for (l, cs) in self.watched.items() for c in cs]))
         
     
     def unit_prop(self):
         """Attempt to apply unit propagation using the current model. Return a conflict, if any"""
 
         while len(self.pending) > 0: # exit loop when no more literal is pending
-            dl, l0, reason = heappop(self.pending)
-            # print("{} <== {}".format(l0, reason if reason else "Guess"))
+            
+            dl, l0, reason = self.pending.pop()
+
             if l0 in self.m:
                 if not self.m[l0]:
                     self.pending = list()
                     return reason # conflict
                 else:
                     continue # inferred literal is consistent with the model
+            
+            # update the model
             if reason: # implied
                 self.m.commit(l0, dl, reason)
             else: # guessed
                 self.m.assign(l0, dl)
+
+            if -l0 not in self.watched:
+                continue
+            
             watched_new = list() # unit clauses
             for c in self.watched[-l0]:
-                print(" {} || {}".format(c, " ".join(sorted(list(map(str, self.watches[c]))))), end=" => ")
-                # c looks for a substitute literal to watch
-                l_subst = None
-                for l in c:
-                    if l not in self.watches[c] and (l not in self.m or self.m[l]):
-                        l_subst = l
+                
+                DEBUG(self.dl, " {} || {}".format(c, c[:2]))
+                
+                # clause c looks for a substitute literal to watch
+                i = 0 if c[0] == -l0 else 1
+                j = None
+                for i in range(2, len(c)):
+                    l = c[i]
+                    if l not in self.m or self.m[l]:
+                        j = i
                         break
-                i = self.watches[c].index(-l0)
-                if l_subst:
-                    self.watched[l_subst].append(c)
-                    self.watches[c][i] = l_subst # c's watch list: [l0, other] -> [l_subst, other]
-                    print(" ".join(map(str, self.watches[c])))
-                # c becomes unit, and implies the only remaining watched literal
+
+                if j:
+                    if c[j] not in self.watched:
+                        self.watched[c[j]] = list()
+                    self.watched[c[j]].append(c)
+                    c[i], c[j] = c[j], c[i]
+                    
+                    DEBUG(self.dl, c[:2])
+                
+                # clause c becomes unit, and implies the only remaining watched literal
                 else:
-                    watched_new.append(c) # c still watches l0 and the other literal
-                    l_other = self.watches[c][1 - i]
-                    heappush(self.pending, (self.dl, l_other, c))
-                    print("Unit. Pend", l_other)
-            print("Pending:", ", ".join([str(t[1]) for t in self.pending]))
-            print(self.m)
-            # print("", end="")
+                    watched_new.append(c) # c still watches -l0 and the other literal
+                    l_other = c[1 - i]
+                    self.pending.append( (self.dl, l_other, c) )
+                    
+                    DEBUG(self.dl, "Unit. Pend {}".format(l_other))
+            
+            DEBUG(self.dl, "Pending: " + ' '.join([str(t[1]) for t in self.pending]))
+            DEBUG(self.dl, self.m)
 
             self.watched[-l0] = watched_new
         
@@ -145,16 +184,15 @@ class CDCL:
         return [x for x in self.xs if not self.m.has_var(x)]
     
     def should_restart(self):
-        return self.conflict_count >= self.reluctant[1] * RESTART_MULTIPLIER
+        return self.conflict_count >= self.restart_pair[1] * RESTART_MULTIPLIER
     
     def restart(self):
-        print("Restart: ", self.conflict_count)
-        self.pending = list()
-        self.conflict_count = 0
-        self.reluctant = self.reluctant_next(*self.reluctant)
+        INFO(self.dl, "Restart after {} conflicts\n\n\n".format(self.conflict_count))
         self.m.undo(0)
         self.dl = 1
-        # print(self.m)
+        self.pending = list()
+        self.restart_pair = self.reluctant_doubling(*self.restart_pair)
+        self.conflict_count = 0
     
     def analyze(self, conflict):
         """Analyze the conflict and return the level to which to backtrack"""
@@ -173,91 +211,10 @@ class CDCL:
         return all(c.modeled_by(self.m) for c in self.cs)
 
 
-class Clause:
-
-    counter = 0
-
-    def __init__(self, ns):
-        """ns - a list of integers representing literals"""
-        self.ls = set()
-        self.trivial = False
-        self.id = Clause.counter
-        Clause.counter += 1
-        for n in ns:
-            l = Literal(n)
-            self.ls.add(l)
-            # check if both n and -n are present
-            if -l in self.ls:
-                self.trivial = True
-    
-    def has_var(self, x):
-        l = Literal(x)
-        return l in self.ls or -l in self.ls
-    
-    def xs(self):
-        return (l.var for l in self.ls)
-    
-    def start_watching(self):
-        res = list()
-        for l in self.ls:
-            res.append(l)
-            if len(res) == 2:
-                break
-        assert(len(res) == 2)
-        return res
-    
-    def get_only(self):
-        assert(len(self.ls) == 1)
-        for l in self.ls:
-            return l
-
-    def __contains__(self, l):
-        return l in self.ls
-    
-    def __len__(self):
-        return len(self.ls)
-    
-    def __iter__(self):
-        return iter(self.ls)
-    
-    def __eq__(self, other):
-        return self.id == other.id
-    
-    def __lt__(self, other):
-        return self.id < other.id
-    
-    def __hash__(self):
-        return self.id
-
-    def __getitem__(self, x):
-        """Return the literal that contains v in this clause"""
-        l = Literal(x)
-        if l in self.ls:
-            return l
-        elif -l in self.ls:
-            return -l
-        else:
-            raise IndexError
-    
-    def modeled_by(self, m):
-        """Determine if clause c can be modeled by m"""
-        # m can always model clause c if c contains free vars not captured by m
-        return any(l not in m or m[l] for l in self.ls)
-    
-    def modeled_by_modulo(self, m, v):
-        """Determine if clause c could be modeled by m if variable v were absent"""
-        return any(l not in m or m[l] for l in self.ls if l.var != v)
-
-    def __str__(self):
-        return repr(self)
-    
-    def __repr__(self):
-        return repr(self.ls)
-
 
 class Model:
 
-    def __init__(self):
+    def __init__(self, ):
         self.alpha = dict()
         self.at_level = defaultdict(list)
         self.dv = set()
@@ -280,11 +237,14 @@ class Model:
         x = l.var
         self.alpha[x] = (l.is_pos, dl, reason)
         self.at_level[dl].append(x)
+        if reason:
+            INFO(dl, "{}  @  {}  {}".format(l, dl, reason))
     
     def assign(self, l, dl):
         """Mark v as decision variable, and guess it's True"""
         self.commit(l, dl, None)
         self.dv.add(l.var)
+        INFO(dl, "{}  @  {}  ----------d----------".format(l, dl))
     
     def undo(self, beta):
         """Undo assignments at level > beta"""
@@ -313,6 +273,87 @@ class Model:
         return str(self)
 
 
+class Clause:
+
+    counter = 0
+
+    def __init__(self, ns):
+        """ns - a list of integers representing literals"""
+        self.ls = list()
+        self.trivial = False
+        global clause_counter
+        self.id = clause_counter
+        clause_counter += 1
+        ls_set = set()
+        for n in ns:
+            l = Literal(n)
+            self.ls.append(l)
+            ls_set.add(l)
+            # check if both n and -n are present
+            if -l in ls_set:
+                self.trivial = True
+    
+    def has_var(self, x):
+        l = Literal(x)
+        return l in self.ls or -l in self.ls
+    
+    def xs(self):
+        return (l.var for l in self.ls)
+    
+    def start_watching(self):
+        res = list()
+        for l in self.ls:
+            res.append(l)
+            if len(res) == 2:
+                break
+        assert(len(res) == 2)
+        return res
+    
+    def get_only(self):
+        assert(len(self.ls) == 1)
+        return self.ls[0]
+
+    # def __contains__(self, l):
+        # return l in self.ls
+    
+    def __len__(self):
+        return len(self.ls)
+    
+    def __iter__(self):
+        return iter(self.ls)
+    
+    def __eq__(self, other):
+        return self.id == other.id
+    
+    def __lt__(self, other):
+        return self.id < other.id
+    
+    def __hash__(self):
+        return self.id
+
+    def __getitem__(self, i):
+        return self.ls[i]
+    
+    def __setitem__(self, i, l):
+        self.ls[i] = l
+    
+    def modeled_by(self, m):
+        """Determine if clause c can be modeled by m"""
+        # m can always model clause c if c contains free vars not captured by m
+        return any(l not in m or m[l] for l in self.ls)
+    
+    def modeled_by_modulo(self, m, v):
+        """Determine if clause c could be modeled by m if variable v were absent"""
+        return any(l not in m or m[l] for l in self.ls if l.var != v)
+
+    def __str__(self):
+        return repr(self)
+    
+    def __repr__(self):
+        return repr(self.ls)
+
+
+
 class Literal:
     
     def __init__(self, n):
@@ -334,7 +375,7 @@ class Literal:
         return self.n == other.n
     
     def __lt__(self, other):
-        return self.n < other.n
+        return self.var < other.var and self.is_neg < other.is_neg
     
     def __hash__(self):
         return self.n
