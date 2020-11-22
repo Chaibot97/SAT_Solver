@@ -13,6 +13,7 @@ class CDCL:
         self.watched = defaultdict(list) # map literal l to clauses that are watching l
         self.watches = dict() # map clause l to the two literals being watching
         self.pending = list() # literals for which we need to check watchers during unit-prop
+        # restart using Knuth's reluctant doubling sequence
         self.conflict_count = 0
         self.reluctant = (1,1)
         self.reluctant_next = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
@@ -41,11 +42,13 @@ class CDCL:
     
     def run(self):
         self.m = Model()
-        self.dl = 0 # decision level
+        # decision level 0 is reserved for implied literals during the first
+        # unit prop (before making any decision)
+        self.dl = 0
         if self.unit_prop():
             return None # conflict without decision
         
-        self.dl = 1 
+        self.dl = 1
         while True:
             free = self.free_vars()
             if len(free) == 0:
@@ -64,15 +67,12 @@ class CDCL:
                 else:
                     l = self.m.undo(beta)
                     self.dl = beta
-                    if l:
-                        # print("Undo", l)
+                    if l: # take the other branch
                         self.dl = beta + 1
                         heappush(self.pending, (self.dl, l, l))
                         conflict = self.unit_prop()
-                    else:
-                        conflict = True
-            # print(self.m)
-            # print()
+                    else: # both branches have been taken
+                        conflict = True # forced backtrack
             self.dl += 1
         assert(self.modeled_by())
         return self.m
@@ -84,7 +84,7 @@ class CDCL:
         
     
     def unit_prop(self):
-        """Attempt to apply unit propagation using the current model. Return True iff found a conflict"""
+        """Attempt to apply unit propagation using the current model. Return a conflict, if any"""
 
         while len(self.pending) > 0: # exit loop when no more literal is pending
             dl, l0, reason = heappop(self.pending)
@@ -95,9 +95,9 @@ class CDCL:
                     return reason # conflict
                 else:
                     continue # inferred literal is consistent with the model
-            if reason: # implication
+            if reason: # implied
                 self.m.commit(l0, dl, reason)
-            else: # guess
+            else: # guessed
                 self.m.assign(l0, dl)
             watched_new = list() # unit clauses
             for c in self.watched[-l0]:
@@ -105,7 +105,7 @@ class CDCL:
                 # c looks for a substitute literal to watch
                 l_subst = None
                 for l in c:
-                    if l not in self.watches[c] and l != -l0 and l not in self.m:
+                    if l not in self.watches[c] and l not in self.m:
                         l_subst = l
                         break
                 i = self.watches[c].index(-l0)
@@ -135,12 +135,13 @@ class CDCL:
     
     def analyze(self, conflict):
         """Analyze the conflict and return the level to which to backtrack"""
-        if self.conflict_count >= self.reluctant[1] * 100:
-            print("Restart (count={})".format(self.conflict_count))
+        if self.conflict_count >= self.reluctant[1] * 3:
+            # print("Restart (count={})".format(self.conflict_count))
             self.conflict_count = 0
             self.reluctant = self.reluctant_next(*self.reluctant)
             beta = 1
         else:
+            # TODO: non-chronological backjump
             beta = self.dl - 1
         return beta
 
@@ -178,9 +179,6 @@ class Literal:
     
     def __lt__(self, other):
         return self.n < other.n
-    
-    # def __gt__(self, other):
-        # return self.n > other.n
     
     def __hash__(self):
         return self.n
