@@ -3,7 +3,9 @@
 
 from collections import defaultdict
 from heapq import heappop, heappush
-from random import choice
+from random import choice, seed
+
+seed(10)
 
 class CDCL:
     def __init__(self, n_vars, nss):
@@ -55,14 +57,15 @@ class CDCL:
                 break
             l = self.branch(free)
             heappush(self.pending, (self.dl, l, None))
-            # print("{} = {} @ {}".format(l.var, l.is_pos, self.dl))
+            print("{} = {} @ {}".format(l.var, l.is_pos, self.dl))
 
             conflict = self.unit_prop()
+            # print(self.m)
             if conflict:
                 self.conflict_count += 1
             while conflict:
                 beta = self.analyze(conflict)
-                if beta <= 0:
+                if beta < 0:
                     return None
                 else:
                     l = self.m.undo(beta)
@@ -73,7 +76,11 @@ class CDCL:
                         conflict = self.unit_prop()
                     else: # both branches have been taken
                         conflict = True # forced backtrack
+                # print(self.m)
+            # print(self.m)
             self.dl += 1
+            if self.should_restart():
+                self.restart()
         assert(self.modeled_by())
         return self.m
 
@@ -101,25 +108,26 @@ class CDCL:
                 self.m.assign(l0, dl)
             watched_new = list() # unit clauses
             for c in self.watched[-l0]:
-                # print(" {} || {}".format(c, " ".join(sorted(list(map(str, self.watches[c]))))), end=" => ")
+                print(" {} || {}".format(c, " ".join(sorted(list(map(str, self.watches[c]))))), end=" => ")
                 # c looks for a substitute literal to watch
                 l_subst = None
                 for l in c:
-                    if l not in self.watches[c] and l not in self.m:
+                    if l not in self.watches[c] and (l not in self.m or self.m[l]):
                         l_subst = l
                         break
                 i = self.watches[c].index(-l0)
                 if l_subst:
                     self.watched[l_subst].append(c)
                     self.watches[c][i] = l_subst # c's watch list: [l0, other] -> [l_subst, other]
+                    print(" ".join(map(str, self.watches[c])))
                 # c becomes unit, and implies the only remaining watched literal
                 else:
                     watched_new.append(c) # c still watches l0 and the other literal
                     l_other = self.watches[c][1 - i]
                     heappush(self.pending, (self.dl, l_other, c))
-                # print(" ".join(map(str, self.watches[c])))
-            # print("Pending:", ", ".join([str(t[1]) for t in self.pending]))
-            # print(self.m)
+                    print("Unit. Pend", l_other)
+            print("Pending:", ", ".join([str(t[1]) for t in self.pending]))
+            print(self.m)
             # print("", end="")
 
             self.watched[-l0] = watched_new
@@ -127,23 +135,30 @@ class CDCL:
         return None
     
     def branch(self, free):
-        return Literal(choice(free))
+        # return Literal(free[0])
+
+        return Literal(choice([-1,1]) * choice(free))
 
     def free_vars(self):
         """Return the list of free variables (those that are not in model m)"""
         return [x for x in self.xs if not self.m.has_var(x)]
     
+    def should_restart(self):
+        return self.conflict_count >= self.reluctant[1] * 10
+    
+    def restart(self):
+        print("Restart: ", self.conflict_count)
+        self.pending = list()
+        self.conflict_count = 0
+        self.reluctant = self.reluctant_next(*self.reluctant)
+        self.m.undo(0)
+        self.dl = 1
+        print(self.m)
+    
     def analyze(self, conflict):
         """Analyze the conflict and return the level to which to backtrack"""
-        if self.conflict_count >= self.reluctant[1] * 3:
-            # print("Restart (count={})".format(self.conflict_count))
-            self.conflict_count = 0
-            self.reluctant = self.reluctant_next(*self.reluctant)
-            beta = 1
-        else:
-            # TODO: non-chronological backjump
-            beta = self.dl - 1
-        return beta
+        # TODO: non-chronological backjump
+        return self.dl - 1
 
     def __str__(self):
         meta = "p cnf {} {}".format(len(self.vs), len(self.cs0))
@@ -313,9 +328,9 @@ class Model:
         return rem_branch
     
     def __str__(self):
-        postfix = lambda x: "_d" if x in self.dv else ""
+        decision = lambda x: "d" if x in self.dv else ""
         if len(self.alpha) > 0:
-            return "\n".join(["-"*5] + ["{}{} = {} @ {}".format(x, postfix(x), self.alpha[x][0], self.alpha[x][1]) \
+            return "\n".join(["-"*5] + ["{} = {} @ {}  {}".format(x, self.alpha[x][0], self.alpha[x][1], decision(x)) \
                 for x in sorted(list(self.alpha.keys()))] + ["-"*5])
         else:
             return "(empty model)"
