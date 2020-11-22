@@ -5,7 +5,9 @@ from collections import defaultdict
 from heapq import heappop, heappush
 from random import choice, seed
 
-seed(10)
+# seed(10)
+
+RESTART_MULTIPLIER = 1
 
 class CDCL:
     def __init__(self, n_vars, nss):
@@ -136,7 +138,6 @@ class CDCL:
     
     def branch(self, free):
         # return Literal(free[0])
-
         return Literal(choice([-1,1]) * choice(free))
 
     def free_vars(self):
@@ -144,7 +145,7 @@ class CDCL:
         return [x for x in self.xs if not self.m.has_var(x)]
     
     def should_restart(self):
-        return self.conflict_count >= self.reluctant[1] * 10
+        return self.conflict_count >= self.reluctant[1] * RESTART_MULTIPLIER
     
     def restart(self):
         print("Restart: ", self.conflict_count)
@@ -153,7 +154,7 @@ class CDCL:
         self.reluctant = self.reluctant_next(*self.reluctant)
         self.m.undo(0)
         self.dl = 1
-        print(self.m)
+        # print(self.m)
     
     def analyze(self, conflict):
         """Analyze the conflict and return the level to which to backtrack"""
@@ -170,33 +171,6 @@ class CDCL:
     def modeled_by(self):
         """Check if the CNF formula is modeled by m"""
         return all(c.modeled_by(self.m) for c in self.cs)
-
-
-class Literal:
-    
-    def __init__(self, n):
-        self.n = n
-        self.var = abs(n)
-        self.is_pos = n > 0
-        self.is_neg = n < 0
-    
-    def __neg__(self):
-        return Literal(-self.n)
-
-    def __str__(self):
-        return str(self.n)
-    
-    def __repr__(self):
-        return str(self.n)
-    
-    def __eq__(self, other):
-        return self.n == other.n
-    
-    def __lt__(self, other):
-        return self.n < other.n
-    
-    def __hash__(self):
-        return self.n
 
 
 class Clause:
@@ -337,3 +311,30 @@ class Model:
     
     def __repr__(self):
         return str(self)
+
+
+class Literal:
+    
+    def __init__(self, n):
+        self.n = n
+        self.var = abs(n)
+        self.is_pos = n > 0
+        self.is_neg = n < 0
+    
+    def __neg__(self):
+        return Literal(-self.n)
+
+    def __str__(self):
+        return str(self.n)
+    
+    def __repr__(self):
+        return str(self.n)
+    
+    def __eq__(self, other):
+        return self.n == other.n
+    
+    def __lt__(self, other):
+        return self.n < other.n
+    
+    def __hash__(self):
+        return self.n
