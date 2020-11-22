@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-from dpll import CNF
+from dpll import CDCL
 
 
 def parseArg():
@@ -31,8 +31,8 @@ def parse_input(f):
 if __name__ == '__main__':
     args = parseArg().parse_args()
     n_vars, nss = parse_input(args.infile)
-    cnf = CNF(n_vars, nss)
-    if cnf.dpll():
+    cnf = CDCL(n_vars, nss)
+    if cnf.run():
         print("sat")
     else:
         print("unsat")
