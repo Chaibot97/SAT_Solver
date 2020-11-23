@@ -2,7 +2,6 @@
 # cython: profile=False
 
 from collections import defaultdict
-from heapq import heappop, heappush
 from random import choice, seed
 import logging as logging
 
@@ -22,6 +21,7 @@ def INFO(dl, msg):
 def DEBUG(dl, msg):
     logging.debug(' ' * dl + str(msg).replace('\n', '\n' + ' ' * dl))
 
+
 class CDCL:
     def __init__(self, n_vars, nss):
         self.xs = set()
@@ -29,10 +29,10 @@ class CDCL:
         self.cs = list() # non-trivial clauses
         self.watched = dict() # map literal l to clauses that are watching l
         self.pending = list() # literals to be assigned true
+        self.conflict_count = 0
         
         # restart using Knuth's reluctant doubling sequence
-        self.conflict_count = 0
-        self.restart_pair = (1, 1)
+        self.restart_counter = (1, 1)
         self.reluctant_doubling = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
         
         # Process clauses and variables
@@ -91,13 +91,17 @@ class CDCL:
                     return None
                 else:
                     l = self.m.undo(beta)
-                    INFO(self.dl, "Backtrack to level {}, assert {}".format(beta, l))
                     self.dl = beta
+                    INFO(self.dl, "Backtrack to level {}".format(beta))
+                    
                     if l: # take the other branch
+                        INFO(self.dl, "Assert {}".format(l))
                         self.dl = beta + 1
                         self.pending.append( (self.dl, l, l) )
                         conflict = self.unit_prop()
+
                     else: # both branches have been taken
+                        INFO(self.dl, "Both branches taken")
                         conflict = True # forced backtrack
                 
                 DEBUG(self.dl, self.m)
@@ -120,10 +124,10 @@ class CDCL:
 
         while len(self.pending) > 0: # exit loop when no more literal is pending
             
-            dl, l0, reason = self.pending.pop()
+            dl, l, reason = self.pending.pop()
 
-            if l0 in self.m:
-                if not self.m[l0]:
+            if l in self.m:
+                if not self.m[l]:
                     self.pending = list()
                     return reason # conflict
                 else:
@@ -131,25 +135,25 @@ class CDCL:
             
             # update the model
             if reason: # implied
-                self.m.commit(l0, dl, reason)
+                self.m.commit(l, dl, reason)
             else: # guessed
-                self.m.assign(l0, dl)
+                self.m.assign(l, dl)
 
-            if -l0 not in self.watched:
-                continue
+            if -l not in self.watched:
+                continue # nothing is watching -l
             
             watched_new = list() # unit clauses
-            for c in self.watched[-l0]:
+            for c in self.watched[-l]:
                 
                 DEBUG(self.dl, " {} || {}".format(c, c[:2]))
                 
                 # clause c looks for a substitute literal to watch
-                i = 0 if c[0] == -l0 else 1
+                i = 0 if c[0] == -l else 1
                 j = None
-                for i in range(2, len(c)):
-                    l = c[i]
-                    if l not in self.m or self.m[l]:
-                        j = i
+                for k in range(2, len(c)):
+                    lk = c[k]
+                    if lk not in self.m or self.m[lk]:
+                        j = k
                         break
 
                 if j:
@@ -162,7 +166,7 @@ class CDCL:
                 
                 # clause c becomes unit, and implies the only remaining watched literal
                 else:
-                    watched_new.append(c) # c still watches -l0 and the other literal
+                    watched_new.append(c) # c still watches -l and the other literal
                     l_other = c[1 - i]
                     self.pending.append( (self.dl, l_other, c) )
                     
@@ -171,45 +175,54 @@ class CDCL:
             DEBUG(self.dl, "Pending: " + ' '.join([str(t[1]) for t in self.pending]))
             DEBUG(self.dl, self.m)
 
-            self.watched[-l0] = watched_new
+            self.watched[-l] = watched_new
         
         return None
     
+    
     def branch(self, free):
-        # return Literal(free[0])
+        """Choose a random free variable and a polarity to branch on"""
         return Literal(choice([-1,1]) * choice(free))
+
 
     def free_vars(self):
         """Return the list of free variables (those that are not in model m)"""
         return [x for x in self.xs if not self.m.has_var(x)]
     
+
     def should_restart(self):
-        return self.conflict_count >= self.restart_pair[1] * RESTART_MULTIPLIER
+        """Check if we should restart search"""
+        return self.conflict_count >= self.restart_counter[1] * RESTART_MULTIPLIER
     
+
     def restart(self):
+        """Restart search"""
         INFO(self.dl, "Restart after {} conflicts\n\n\n".format(self.conflict_count))
         self.m.undo(0)
         self.dl = 1
         self.pending = list()
-        self.restart_pair = self.reluctant_doubling(*self.restart_pair)
+        self.restart_counter = self.reluctant_doubling(*self.restart_counter)
         self.conflict_count = 0
     
+
     def analyze(self, conflict):
         """Analyze the conflict and return the level to which to backtrack"""
         # TODO: non-chronological backjump
         return self.dl - 1
 
-    def __str__(self):
-        meta = "p cnf {} {}".format(len(self.vs), len(self.cs0))
-        return "\n".join([meta] + [str(c) + " 0" for c in self.cs0])
-    
-    def __repr__(self):
-        return str(self)
-            
+
     def modeled_by(self):
         """Check if the CNF formula is modeled by m"""
         return all(c.modeled_by(self.m) for c in self.cs)
 
+
+    def __str__(self):
+        meta = "p cnf {} {}".format(len(self.vs), len(self.cs0))
+        return "\n".join([meta] + [str(c) + " 0" for c in self.cs0])
+    
+
+    def __repr__(self):
+        return str(self)
 
 
 class Model:
