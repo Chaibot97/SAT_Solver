@@ -12,16 +12,17 @@ w=0
 if [ $sat_files != "-" ]; then
   for i in `cat $sat_files`; do
       printf "$i "
+      let "s+=1"
       ./dpll ../../$bench_dir/sat/$i > results 2>&1
+      cat results
       if [ $? -eq 0 ]; then
         if (grep -q "[^n]sat" results) || (grep -q "^sat" results); then
-          echo "Pass!"
+          echo "Pass!" 
           let "c+=1"
-          let "s+=1"
         else
-            echo "Wrong!"
-          let "s+=1"
+          echo "Wrong!"
           let "w+=1"
+          exit
         fi
       else
         echo "Error"
@@ -36,14 +37,13 @@ if [ $unsat_files != "-" ]; then
   for i in `cat $unsat_files`; do
       printf "$i "
       ./dpll ../../$bench_dir/unsat/$i > results 2>&1
+        let "s+=1"
       if [ $? -eq 0 ]; then
         if grep -q "unsat" results; then
           echo "Pass!"
           let "c+=1"
-          let "s+=1"
-          else
-              echo "Wrong!"
-          let "s+=1"
+        else
+          echo "Wrong!"
           let "w+=1"
           fi
       else

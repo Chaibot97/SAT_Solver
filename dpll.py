@@ -6,10 +6,8 @@ from random import choice, seed
 import logging as logging
 
 LEVEL = logging.INFO
-LOG_FILE = 'dpll.log'
-logging.basicConfig(level=LEVEL, filename=LOG_FILE, filemode='w', format='%(message)s')
 
-# seed(10)
+seed(10)
 
 RESTART_MULTIPLIER = 1
 
@@ -23,7 +21,8 @@ def DEBUG(dl, msg):
 
 
 class CDCL:
-    def __init__(self, n_vars, nss):
+    def __init__(self, n_vars, nss, log_file="log"):
+        logging.basicConfig(level=LEVEL, filemode='w', filename=log_file, format='%(message)s')
         self.xs = set()
         self.cs0 = list() # includes trivial clauses
         self.cs = list() # non-trivial clauses
@@ -31,7 +30,7 @@ class CDCL:
         self.pending = list() # literals to be assigned true
         self.conflict_count = 0
         
-        # restart using Knuth's reluctant doubling sequence
+        # restart using Knuth's reluctant doubleing sequence
         self.restart_counter = (1, 1)
         self.reluctant_doubling = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
         
@@ -82,10 +81,9 @@ class CDCL:
             conflict = self.unit_prop()
 
             DEBUG(self.dl, self.m)
-            
-            if conflict:
-                self.conflict_count += 1
+
             while conflict:
+                self.conflict_count += 1
                 beta = self.analyze(conflict)
                 if beta < 0:
                     return None
@@ -97,7 +95,14 @@ class CDCL:
                     if l: # take the other branch
                         INFO(self.dl, "Assert {}".format(l))
                         self.dl = beta + 1
-                        self.pending.append( (self.dl, l, l) )
+                        # d 
+                        # UIP learnt clause
+                        # one literal == self.dl, (others < self.dl), others=False. one literal l = True. Unit prop looks at l
+                        # beta, learnt clause
+
+                        
+
+                        self.pending.append( (self.dl, l, Clause([l.n])) )
                         conflict = self.unit_prop()
 
                     else: # both branches have been taken
@@ -111,6 +116,7 @@ class CDCL:
             else:
                 self.dl += 1
         assert(self.modeled_by())
+        # print(self.conflict_count)
         return self.m
 
     
@@ -182,6 +188,7 @@ class CDCL:
     
     def branch(self, free):
         """Choose a random free variable and a polarity to branch on"""
+        return Literal(free[0])
         return Literal(choice([-1,1]) * choice(free))
 
 
@@ -192,6 +199,7 @@ class CDCL:
 
     def should_restart(self):
         """Check if we should restart search"""
+        return False
         return self.conflict_count >= self.restart_counter[1] * RESTART_MULTIPLIER
     
 
@@ -208,7 +216,61 @@ class CDCL:
     def analyze(self, conflict):
         """Analyze the conflict and return the level to which to backtrack"""
         # TODO: non-chronological backjump
-        return self.dl - 1
+        if type(conflict) == bool:
+            return self.dl - 1
+        
+        INFO(self.dl, "Conflict: {}".format(conflict))
+        new_conf = set(conflict)
+        conflict = None
+        while conflict != new_conf:
+            conflict = new_conf.copy()
+            for l in conflict:
+                assert(l in self.m)
+                # if l.var in self.m.alpha:
+                a = self.m.alpha[l.var]
+                w = a[2]
+                if w and len(w.ls) == 1:
+                    INFO(self.dl, "singleton " + str(w))
+                if w and -l in w and len(w) > 1:
+                    INFO(self.dl, "Trace omega to {}".format(w))
+                    new_conf = new_conf.union(set(w))
+                    new_conf.remove(l)
+                    new_conf.remove(-l)
+        learned = conflict
+        self.cs.append(learned)
+        INFO(self.dl, "Learned {} @ dl {}".format(learned, self.dl))
+        # print([(l, self.m.alpha[l.var][1]) for l in conflict_c])
+
+        # A -> B
+        # B -> Y
+        # A -> C -> X
+        # A -> C -> -X
+        # sequence of decisions: A = True, B = ?, C = True ==> conflict at X,
+        # but B not relevant
+        
+        # print(conflict)
+        # if len(learned) == 1: # learned singleton
+            # beta = self.dl - 1
+        prev_lvl = list()
+        curr_lvl = list()
+        for l in learned:
+            if dl_of(l) < self.dl:
+                prev_lvl.append(l)
+            else:
+                curr_lvl.append(l)
+        assert(len(curr_lvl) == 1)
+        if len(prev_lvl) == 0:
+            beta = slef.dl - 1
+
+                
+
+            prev_lvl = [l for l in learned if dl_of(l) < self.dl]
+            curr_lvl = 
+            dl_of = lambda l: self.m.alpha[l.var][1]
+            beta = max([dl_of(l) if dl_of(l) < self.dl else 0 for l in learned])
+        # print(beta)
+        
+        return beta
 
 
     def modeled_by(self):
