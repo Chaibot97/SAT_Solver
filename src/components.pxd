@@ -25,3 +25,5 @@ cdef class Literal:
         bint is_pos
         bint is_neg
         int n # +var or -var
+    
+    cdef int sign(self)

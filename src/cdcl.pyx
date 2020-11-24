@@ -22,11 +22,10 @@ cdef:
 cdef class CDCL:
     cdef readonly:
         int log_level
-        list xs
-        list cs0
-        list cs
+        list xs, cs0, cs
         set learned
         dict watched
+        dict saved_phase
         list assertions
         int conflict_count
         int learning_limit
@@ -98,6 +97,8 @@ cdef class CDCL:
                         if x not in xs_set:
                             xs_set.add(x)
                             self.xs.append(x)
+        
+        self.saved_phase = {x: 0 for x in self.xs}
         
         self.learning_limit = max(len(self.cs) // 2, 100)
 
@@ -278,6 +279,7 @@ cdef class CDCL:
                 self.m.assign(l, dl)
                 self.INFO(lambda: "{:>3}  @  {}  ----------d----------".format(str(l), self.dl))
             
+            self.saved_phase[l.var] = l.sign()
             self.branching_heuristics.on_assign(l.var)
 
             if -l not in self.watched:
@@ -317,10 +319,12 @@ cdef class CDCL:
         """Choose a random free variable and a polarity to branch on"""
         cdef:
             int x
-        # x = self.branching_heuristics.pick(free)
-        x = choice(free)
-        # return Literal(free[0])
-        return Literal(choice([-1,1]) * x)
+            int sign
+        x = self.branching_heuristics.pick(free)
+        sign = self.saved_phase[x]
+        if sign == 0: # no previously saved phase
+            sign = choice([-1,1])
+        return Literal(sign * x)
 
 
     cdef list free_vars(self):

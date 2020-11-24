@@ -68,6 +68,8 @@ class CDCL:
                             xs_set.add(x)
                             self.xs.append(x)
         
+        self.saved_phase = {x: 0 for x in self.xs}
+        
         self.learning_limit = max(len(self.cs) // 3, 100)
         
         self.branching_heuristics = ERMA(self.xs)
@@ -231,6 +233,7 @@ class CDCL:
                 self.m.assign(l, dl)
                 self.INFO(lambda: "{:>3}  @  {}  ----------d----------".format(str(l), self.dl))
             
+            self.saved_phase[l.var] = l.sign()
             self.branching_heuristics.on_assign(l.var)
 
             if -l not in self.watched:
@@ -268,10 +271,11 @@ class CDCL:
     
     def branch(self, free):
         """Choose a random free variable and a polarity to branch on"""
-        # x = self.branching_heuristics.pick(free)
-        x = choice(free)
-        # return Literal(free[0])
-        return Literal(choice([-1,1]) * x)
+        x = self.branching_heuristics.pick(free)
+        sign = self.saved_phase[x]
+        if sign == 0: # no previously saved phase
+            sign = choice([-1,1])
+        return Literal(sign * x)
 
 
     def free_vars(self):
@@ -311,6 +315,7 @@ class CDCL:
                 l = c[i]
                 self.watched[l].remove(c)
             self.learned.remove(c)
+        self.learning_limit *= 2
         
 
 
@@ -615,6 +620,9 @@ class Literal:
         self.var = abs(n)
         self.is_pos = n > 0
         self.is_neg = n < 0
+
+    def sign(self):
+        return 1 if self.is_pos else -1
     
     def __neg__(self):
         return Literal(-self.n)

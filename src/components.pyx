@@ -124,6 +124,9 @@ cdef class Literal:
         self.is_pos = n > 0
         self.is_neg = n < 0
     
+    cdef int sign(self):
+        return 1 if self.is_pos else -1
+    
     def __neg__(self):
         return Literal(-self.n)
 
