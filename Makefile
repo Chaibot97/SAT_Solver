@@ -4,5 +4,5 @@ cython:
 	python setup.py build_ext --build-lib $(dir)
 
 clean:
-	(cd $(dir) && rm -rf dpll.c* dpll.html)
+	(cd $(dir) && rm -rf *.c *.so *.html)
 	
