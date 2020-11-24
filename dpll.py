@@ -1,7 +1,7 @@
 # cython: language_level=3
 # cython: profile=False
 
-from collections import defaultdict
+from collections import defaultdict, deque, Counter
 from random import choice, seed
 import logging as logging
 
@@ -14,10 +14,10 @@ RESTART_MULTIPLIER = 1
 clause_counter = 0
 
 def INFO(dl, msg):
-    logging.info(' ' * dl + str(msg))
+    logging.info('  ' * max(0,dl) + str(msg))
 
 def DEBUG(dl, msg):
-    logging.debug(' ' * dl + str(msg).replace('\n', '\n' + ' ' * dl))
+    logging.debug('  ' * max(0,dl) + str(msg).replace('\n', '\n' + '  ' * dl))
 
 
 class CDCL:
@@ -27,48 +27,102 @@ class CDCL:
         self.cs0 = list() # includes trivial clauses
         self.cs = list() # non-trivial clauses
         self.watched = dict() # map literal l to clauses that are watching l
-        self.pending = list() # literals to be assigned true
+        self.assertions = list() # literals to be assigned true
         self.conflict_count = 0
-        
+
         # restart using Knuth's reluctant doubleing sequence
         self.restart_counter = (1, 1)
         self.reluctant_doubling = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
         
-        # Process clauses and variables
+        # decision levels:
+        #   -2 :: assertions of singleton clauses
+        #   -1 :: assertions of literals learned during pre-processing
+        #  > 0 :: normal decisions
+        self.m = Model()
+        self.sat = False
+        self.dl = -2
+        
+        # process clauses and variables
         for ns in nss:
-            c = Clause(ns)
+            c = Clause.from_ns(ns)
             self.cs0.append(c)
             if not c.trivial:
-                if len(c) == 1:
-                    self.pending.append( (0, c.get_only(), c) )
+                if c.singleton: # singleton clause
+                    self.assertions.append( (c.get_only(), c) )
                 else:
                     self.cs.append(c)
                     for x in c.xs():
                         self.xs.add(x)
 
-        self.preprocess()
+        self.sat = self.preprocess()
+        if self.sat:
+            self.sat = self.run()
     
 
     def preprocess(self):
-        """Set up watched literals"""
+        """Set up watched literals, and infer as much as possible without decision"""
         cs_trivial = list()
         for c in self.cs:
             for l in c.start_watching():
                 if l not in self.watched:
                     self.watched[l] = list()
                 self.watched[l].append(c)
-    
+
+        if self.unit_prop():
+            return False
+        
+        # try both polarities of each variable
+        self.dl = -1
+        fixpoint = 2
+        while fixpoint > 0:
+            for x in self.xs:
+                if x in self.m.alpha:
+                    continue
+                pos, neg = Literal(x), Literal(-x)
+                
+                # try pos
+                INFO(self.dl, "Try {}".format(pos))
+                self.assertions.append( (pos, None) )
+                conflict = self.unit_prop()
+                self.m.undo(-2)
+                
+                # pos bad ==> assert neg
+                if conflict:
+                    fixpoint = 2
+                    INFO(self.dl, "pos bad ==> assert neg")
+                    self.assertions.append( (neg, Clause([neg]), -2) )
+                    # neg also bad
+                    conflict = self.unit_prop()
+                    if conflict:
+                        INFO(self.dl, "neg also bad")
+                        return False
+                
+                # pos good ==> try neg
+                else:
+                    INFO(self.dl, "pos ok ==> try neg")
+                    self.assertions.append( (neg, None) )
+                    conflict = self.unit_prop()
+                    self.m.undo(-2)
+
+                    # neg bad ==> assert pos
+                    if conflict:
+                        fixpoint = 2
+                        INFO(self.dl, "neg bad ==> assert pos")
+                        self.assertions.append( (pos, Clause([pos]), -2) )
+                        assert(not self.unit_prop())
+                    # neg good ==> no info
+                    else:
+                        INFO(self.dl, "neg ok ==> no info")
+
+                DEBUG(self.dl, str(self.m))
+                DEBUG(self.dl, "")
+            fixpoint -= 1
+            INFO(self.dl, "fixpoint={}".format(fixpoint))
+        return True
+
 
     def run(self):
-        """Run CDCL. Return the model if SAT; otherwise return None"""
-        
-        self.m = Model()
-
-        # decision level 0 is reserved for literals implied during the first
-        # unit prop (before making any decision) due to singleton clauses
-        self.dl = 0
-        if self.unit_prop():
-            return None # conflict without decision
+        """Run CDCL. Return the model if SAT, or None otherwise"""
         
         self.dl = 1
         while True:
@@ -76,7 +130,7 @@ class CDCL:
             if len(free) == 0:
                 break
             l = self.branch(free)
-            self.pending.append( (self.dl, l, None) )
+            self.assertions.append( (l, None) )
             
             conflict = self.unit_prop()
 
@@ -84,39 +138,28 @@ class CDCL:
 
             while conflict:
                 self.conflict_count += 1
-                beta = self.analyze(conflict)
+                beta, only_true, learned = self.analyze(conflict)
                 if beta < 0:
                     return None
                 else:
-                    l = self.m.undo(beta)
-                    self.dl = beta
                     INFO(self.dl, "Backtrack to level {}".format(beta))
-                    
-                    if l: # take the other branch
-                        INFO(self.dl, "Assert {}".format(l))
-                        self.dl = beta + 1
-                        # d 
-                        # UIP learnt clause
-                        # one literal == self.dl, (others < self.dl), others=False. one literal l = True. Unit prop looks at l
-                        # beta, learnt clause
+                    self.cs.append(learned)
+                    # assert(self.m[only_true])
+                    self.m.undo(beta)
+                    self.dl = beta
+                    INFO(self.dl, "Assert {}".format(only_true))
+                    self.assertions.append( (only_true, learned) )
+                    conflict = self.unit_prop()
 
-                        
-
-                        self.pending.append( (self.dl, l, Clause([l.n])) )
-                        conflict = self.unit_prop()
-
-                    else: # both branches have been taken
-                        INFO(self.dl, "Both branches taken")
-                        conflict = True # forced backtrack
-                
                 DEBUG(self.dl, self.m)
 
             if self.should_restart():
                 self.restart()
             else:
                 self.dl += 1
-        assert(self.modeled_by())
-        # print(self.conflict_count)
+        
+        assert(self.modeled_by()) # make sure that, if sat, the model is indeed correct
+        
         return self.m
 
     
@@ -128,13 +171,19 @@ class CDCL:
     def unit_prop(self):
         """Attempt to apply unit propagation using the current model. Return a conflict, if any"""
 
-        while len(self.pending) > 0: # exit loop when no more literal is pending
+        while len(self.assertions) > 0: # exit loop when no more literal is pending
             
-            dl, l, reason = self.pending.pop()
+            t = self.assertions.pop()
+
+            if len(t) == 2:
+                l, reason = t
+                dl = self.dl
+            elif len(t) == 3:
+                l, reason, dl = t
 
             if l in self.m:
                 if not self.m[l]:
-                    self.pending = list()
+                    self.assertions = list()
                     return reason # conflict
                 else:
                     continue # inferred literal is consistent with the model
@@ -142,8 +191,10 @@ class CDCL:
             # update the model
             if reason: # implied
                 self.m.commit(l, dl, reason)
+                INFO(self.dl, "{:>3}  @  {}  {}".format(str(l), self.dl, reason))
             else: # guessed
                 self.m.assign(l, dl)
+                INFO(self.dl, "{:>3}  @  {}  ----------d----------".format(str(l), self.dl))
 
             if -l not in self.watched:
                 continue # nothing is watching -l
@@ -174,11 +225,11 @@ class CDCL:
                 else:
                     watched_new.append(c) # c still watches -l and the other literal
                     l_other = c[1 - i]
-                    self.pending.append( (self.dl, l_other, c) )
+                    self.assertions.append( (l_other, c) )
                     
                     DEBUG(self.dl, "Unit. Pend {}".format(l_other))
             
-            DEBUG(self.dl, "Pending: " + ' '.join([str(t[1]) for t in self.pending]))
+            DEBUG(self.dl, "Pending: " + ' '.join([str(t[1]) for t in self.assertions]))
             DEBUG(self.dl, self.m)
 
             self.watched[-l] = watched_new
@@ -188,7 +239,7 @@ class CDCL:
     
     def branch(self, free):
         """Choose a random free variable and a polarity to branch on"""
-        return Literal(free[0])
+        # return Literal(free[0])
         return Literal(choice([-1,1]) * choice(free))
 
 
@@ -199,78 +250,120 @@ class CDCL:
 
     def should_restart(self):
         """Check if we should restart search"""
-        return False
         return self.conflict_count >= self.restart_counter[1] * RESTART_MULTIPLIER
     
 
     def restart(self):
         """Restart search"""
-        INFO(self.dl, "Restart after {} conflicts\n\n\n".format(self.conflict_count))
+        INFO(0, "Restart after {} conflicts\n\n\n".format(self.conflict_count))
+        INFO(0, self.m)
         self.m.undo(0)
         self.dl = 1
-        self.pending = list()
+        self.assertions = list()
         self.restart_counter = self.reluctant_doubling(*self.restart_counter)
         self.conflict_count = 0
+
+
+    def uip_fast(self, conflict):
+        clause_str = lambda c: "[" + ",  ".join(["{}  @{}".format(l, self.m.level_of(l)) for l in c]) + "]"
+        frontier = deque(conflict)
+        frontier_set = set(frontier)
+        level_count = Counter()
+        for l in frontier:
+            level_count[self.m.level_of(l)] += 1
+
+        end = None
+        frontier.append(end)
+        changes = 0 # change since last seen end
+        while True:
+            if level_count[self.dl] == 1: break
+            l = frontier.popleft()
+            if l is end and changes == 0:
+                break
+            
+            if l is end:
+                changes = 0 # reset
+                frontier.append(end)
+            else:
+                reason = self.m.predecessor(l)
+                if not reason: # decision variable
+                    frontier.append(l)
+                else:
+                    level_count[self.m.level_of(l)] -= 1
+                    for m in reason:
+                        if m != -l and m not in frontier_set:
+                            frontier.append(m)
+                            frontier_set.add(m)
+                            changes += 1
+                            level_count[self.m.level_of(m)] += 1
+        
+        assert(level_count[self.dl] == 1)
+        learned = Clause([l for l in frontier if l is not end])
+        INFO(self.dl, "Learned {}".format(clause_str(learned)))
+        only_true = next(filter(lambda l: self.m.level_of(l) == self.dl, learned))
+        return learned, only_true
+        
+        
+    def uip(self, conflict):
+
+        frontier, old_frontier = conflict, None
+        at_curr_level = lambda l: self.m.level_of(l) == self.dl
+        clause_str = lambda c: "[" + ",  ".join(["{}  @{}".format(l, self.m.level_of(l)) for l in c]) + "]"
+        INFO(self.dl, "Conflict frontier {}".format(clause_str(frontier)))
+        
+        while True:
+
+            for l in list(frontier):
+                assert(l in self.m)
+                reason = self.m.predecessor(l)
+                if reason: # not a decision literal
+                    assert(-l in reason)
+                    if reason.singleton:
+                        INFO(self.dl, "Trace {} to singleton {}".format(-l, clause_str(reason)))
+                    else:
+                        INFO(self.dl, "Trace {} to {}".format(-l, clause_str(reason)))
+                        frontier = frontier.resolve(reason, l.var)
+                        INFO(self.dl, "Resolvent {}".format(clause_str(frontier)))
+
+            ls_curr = [l for l in frontier if at_curr_level(l)]
+            if old_frontier and old_frontier.equiv(frontier) or len(ls_curr) == 1:
+                break
+            old_frontier = frontier
+                    
+            # if not actual.equiv(expected):
+            #     INFO(self.dl, "expected = {}, actual = {}".format(expected, actual))
+            #     assert(False)
+        
+
+        assert(len(ls_curr) == 1)
+        learned = Clause(frontier)
+        only_true = ls_curr[0]
+        INFO(self.dl, "Learned {}".format(clause_str(learned)))
+        return learned, only_true
     
 
     def analyze(self, conflict):
         """Analyze the conflict and return the level to which to backtrack"""
-        # TODO: non-chronological backjump
-        if type(conflict) == bool:
-            return self.dl - 1
+    
+        # learned, only_true = self.uip(conflict)
+        learned, only_true = self.uip_fast(conflict)
+        i = learned.index(only_true)
         
-        INFO(self.dl, "Conflict: {}".format(conflict))
-        new_conf = set(conflict)
-        conflict = None
-        while conflict != new_conf:
-            conflict = new_conf.copy()
-            for l in conflict:
-                assert(l in self.m)
-                # if l.var in self.m.alpha:
-                a = self.m.alpha[l.var]
-                w = a[2]
-                if w and len(w.ls) == 1:
-                    INFO(self.dl, "singleton " + str(w))
-                if w and -l in w and len(w) > 1:
-                    INFO(self.dl, "Trace omega to {}".format(w))
-                    new_conf = new_conf.union(set(w))
-                    new_conf.remove(l)
-                    new_conf.remove(-l)
-        learned = conflict
-        self.cs.append(learned)
-        INFO(self.dl, "Learned {} @ dl {}".format(learned, self.dl))
-        # print([(l, self.m.alpha[l.var][1]) for l in conflict_c])
-
-        # A -> B
-        # B -> Y
-        # A -> C -> X
-        # A -> C -> -X
-        # sequence of decisions: A = True, B = ?, C = True ==> conflict at X,
-        # but B not relevant
-        
-        # print(conflict)
-        # if len(learned) == 1: # learned singleton
-            # beta = self.dl - 1
-        prev_lvl = list()
-        curr_lvl = list()
-        for l in learned:
-            if dl_of(l) < self.dl:
-                prev_lvl.append(l)
-            else:
-                curr_lvl.append(l)
-        assert(len(curr_lvl) == 1)
-        if len(prev_lvl) == 0:
-            beta = slef.dl - 1
-
-                
-
-            prev_lvl = [l for l in learned if dl_of(l) < self.dl]
-            curr_lvl = 
-            dl_of = lambda l: self.m.alpha[l.var][1]
-            beta = max([dl_of(l) if dl_of(l) < self.dl else 0 for l in learned])
-        # print(beta)
-        
-        return beta
+        if learned.singleton:
+            beta = self.dl - 1
+        else:
+            self.cs.append(learned)
+            # only one literal is true after backjump
+            # put that literal at index 0
+            learned[0], learned[i] = learned[i], learned[0]
+            # set up watch list for the newly learned clause
+            for i in range(2):
+                l = learned[i]
+                if l not in self.watched:
+                    self.watched[l] = list()
+                self.watched[l].append(learned)
+            beta = max(0, max([self.m.level_of(l) for l in learned if l != only_true]))
+        return beta, only_true, learned
 
 
     def modeled_by(self):
@@ -289,7 +382,7 @@ class CDCL:
 
 class Model:
 
-    def __init__(self, ):
+    def __init__(self):
         self.alpha = dict()
         self.at_level = defaultdict(list)
         self.dv = set()
@@ -307,19 +400,32 @@ class Model:
     def __len__(self):
         return len(self.alpha)
     
+
+    def predecessor(self, l):
+        _, _, reason = self.alpha[l.var]
+        return reason
+    
+
+    def level_of(self, l):
+        _, dl, _ = self.alpha[l.var]
+        return dl
+
+
     def commit(self, l, dl, reason):
         """Set literal l to True at level dl according to the given reason clause"""
         x = l.var
+        assert(x != 0)
         self.alpha[x] = (l.is_pos, dl, reason)
         self.at_level[dl].append(x)
         if reason:
-            INFO(dl, "{}  @  {}  {}".format(l, dl, reason))
+            assert(l in reason)
     
+
     def assign(self, l, dl):
         """Mark v as decision variable, and guess it's True"""
         self.commit(l, dl, None)
         self.dv.add(l.var)
-        INFO(dl, "{}  @  {}  ----------d----------".format(l, dl))
+        
     
     def undo(self, beta):
         """Undo assignments at level > beta"""
@@ -337,10 +443,12 @@ class Model:
         return rem_branch
     
     def __str__(self):
-        decision = lambda x: "d" if x in self.dv else ""
+        is_dv = lambda x: "d" if x in self.dv else ""
+        to_lit = lambda x: (1 if self.alpha[x][0] else -1) * x
+        sep = ["-"*5 + "(model)" + "-"*5]
         if len(self.alpha) > 0:
-            return "\n".join(["-"*5] + ["{} = {} @ {}  {}".format(x, self.alpha[x][0], self.alpha[x][1], decision(x)) \
-                for x in sorted(list(self.alpha.keys()))] + ["-"*5])
+            return "\n".join(sep + ["{:>3}  @  {:>2}  {}".format(to_lit(x), self.alpha[x][1], is_dv(x)) \
+                for x in sorted(list(self.alpha.keys()))] + sep)
         else:
             return "(empty model)"
     
@@ -352,21 +460,46 @@ class Clause:
 
     counter = 0
 
-    def __init__(self, ns):
-        """ns - a list of integers representing literals"""
-        self.ls = list()
-        self.trivial = False
+    def __init__(self, ls):
         global clause_counter
         self.id = clause_counter
         clause_counter += 1
-        ls_set = set()
+
+        self.ls = [l for l in ls]
+        self.singleton = len(self.ls) == 1
+        # assume non-triviality
+        self.trivial = False
+
+    @classmethod
+    def from_ns(cls, ns):
+        """ns - a list of integers representing literals"""
+
+        ls = set()
+        trivial = False
         for n in ns:
             l = Literal(n)
-            self.ls.append(l)
-            ls_set.add(l)
+            ls.add(l)
             # check if both n and -n are present
-            if -l in ls_set:
-                self.trivial = True
+            if -l in ls:
+                trivial = True
+
+        c = cls(ls)
+        c.trivial = trivial
+        return c
+    
+    def resolve(self, other, on):
+        ls = set()
+        for l in self.ls:
+            if l.var != on:
+                ls.add(l)
+        for l in other.ls:
+            if l.var != on:
+                ls.add(l)
+        return Clause(ls)
+    
+    def equiv(self, other):
+        return len(self) == len(other) and all([l in other for l in self])
+    
     
     def has_var(self, x):
         l = Literal(x)
@@ -390,6 +523,9 @@ class Clause:
 
     # def __contains__(self, l):
         # return l in self.ls
+
+    def index(self, l):
+        return self.ls.index(l)
     
     def __len__(self):
         return len(self.ls)

@@ -13,8 +13,9 @@ if [ $sat_files != "-" ]; then
   for i in `cat $sat_files`; do
       printf "$i "
       let "s+=1"
-      ./dpll ../../$bench_dir/sat/$i > results 2>&1
-      cat results
+      f="../../$bench_dir/sat/$i"
+      ./dpll "$f" > results 2>&1
+      # cat results
       if [ $? -eq 0 ]; then
         if (grep -q "[^n]sat" results) || (grep -q "^sat" results); then
           echo "Pass!" 
@@ -22,11 +23,14 @@ if [ $sat_files != "-" ]; then
         else
           echo "Wrong!"
           let "w+=1"
+          cat "$f" | z3 -dimacs -in
           exit
         fi
       else
         echo "Error"
         cat results
+        cat "$f" | z3 -dimacs -in
+        exit
       fi
       
       rm -f results
@@ -36,7 +40,8 @@ fi
 if [ $unsat_files != "-" ]; then
   for i in `cat $unsat_files`; do
       printf "$i "
-      ./dpll ../../$bench_dir/unsat/$i > results 2>&1
+      f="../../$bench_dir/unsatsat/$i"
+      ./dpll "$f" > results 2>&1
         let "s+=1"
       if [ $? -eq 0 ]; then
         if grep -q "unsat" results; then
@@ -45,10 +50,14 @@ if [ $unsat_files != "-" ]; then
         else
           echo "Wrong!"
           let "w+=1"
+          cat "$f" | z3 -dimacs -in
+          exit
           fi
       else
         echo "Error"
         cat results
+        cat "$f" | z3 -dimacs -in
+        exit
       fi
       
       rm -f results

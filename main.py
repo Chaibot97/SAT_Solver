@@ -1,4 +1,4 @@
-#!/usr/bin/env pypy3
+#!/usr/bin/env python3
 
 import argparse
 from dpll import CDCL
@@ -33,7 +33,7 @@ if __name__ == '__main__':
     args = parseArg().parse_args()
     n_vars, nss = parse_input(args.infile)
     cnf = CDCL(n_vars, nss, "dpll.log")
-    if cnf.run():
+    if cnf.sat:
         print("sat")
     else:
         print("unsat")
