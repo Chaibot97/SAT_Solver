@@ -5,32 +5,61 @@ import logging as logging
 from collections import defaultdict, deque, Counter
 from random import choice, seed, sample
 from copy import copy
-from itertools import chain
+
+from components cimport Literal, Clause
+from components import Literal, Clause
+from branching cimport ERMA
 from branching import ERMA
 
 # seed(10)
 
-RESTART_MULTIPLIER = 1
+cdef:
+    int RESTART_MULTIPLIER = 1
+    int LVL_DEBUG = 0
+    int LVL_INFO = 1
+    int LVL_WARN = 2
 
-clause_counter = 0
+cdef class CDCL:
+    cdef readonly:
+        int log_level
+        list xs
+        list cs0
+        list cs
+        set learned
+        dict watched
+        list assertions
+        int conflict_count
+        int learning_limit
+        tuple restart_counter
+        Model m
+        bint sat
+        int dl
+        list ns
+        ERMA branching_heuristics
+        int n_iter
 
-
-class CDCL:
-
-    def INFO(self, msg, dl=None):
-        if self.log_level > logging.INFO: return
+        
+    cdef INFO(self, msg, dl=None):
+        if self.log_level > LVL_INFO: return
         if dl is None:
             dl = self.dl
         logging.info('  ' * max(0,dl) + str(msg()))
     
-    def DEBUG(self, msg, dl=None):
-        if self.log_level > logging.DEBUG: return
+    cdef DEBUG(self, msg, dl=None):
+        if self.log_level > LVL_DEBUG: return
         if dl is None:
             dl = self.dl
         logging.debug('  ' * max(0,dl) + str(msg()).replace('\n', '\n' + '  ' * dl))
     
 
-    def __init__(self, n_vars, nss, log_file="log", log_level=logging.WARN):
+    def __init__(self, n_vars, nss, log_file="log", log_level=LVL_WARN):
+        cdef:
+            Clause c
+            bint sat
+            set xs_set
+            list stats
+            
+
         logging.basicConfig(level=log_level, filemode='w', filename=log_file, format='%(message)s')
         self.log_level = log_level
 
@@ -41,6 +70,8 @@ class CDCL:
         self.watched = dict() # map literal l to clauses that are watching l
         self.assertions = list() # literals to be assigned true
         self.conflict_count = 0
+
+        
 
         # restart using Knuth's reluctant doubleing sequence
         self.restart_counter = (1, 1)
@@ -68,8 +99,8 @@ class CDCL:
                             xs_set.add(x)
                             self.xs.append(x)
         
-        self.learning_limit = max(len(self.cs) // 3, 100)
-        
+        self.learning_limit = max(len(self.cs) // 2, 100)
+
         self.branching_heuristics = ERMA(self.xs)
 
         self.n_iter = 0
@@ -85,9 +116,17 @@ class CDCL:
         self.INFO("\n".join(stats), 0)
     
 
-    def preprocess(self):
+    cdef bint preprocess(self):
         """Set up watched literals, and infer as much as possible without decision"""
-        cs_trivial = list()
+        cdef:
+            Clause c
+            Literal l
+            list cs_trivial = list()
+            int fixpoint
+            int x
+            Literal pos, neg
+            
+        
         for c in self.cs:
             for l in c.start_watching():
                 if l not in self.watched:
@@ -203,8 +242,16 @@ class CDCL:
         assert(all([l in c[:2] for (l, cs) in self.watched.items() for c in cs]))
         
     
-    def unit_prop(self):
+    cdef unit_prop(self):
         """Attempt to apply unit propagation using the current model. Return a conflict, if any"""
+        cdef:
+            Literal l, l_other, lk
+            Clause reason
+            tuple t
+            int dl
+            set watched_new
+            int i, j, k
+            
 
         while len(self.assertions) > 0: # exit loop when no more literal is pending
             
@@ -241,14 +288,14 @@ class CDCL:
                 
                 # clause c looks for a substitute literal to watch
                 i = 0 if c[0] == -l else 1
-                j = None
+                j = -1
                 for k in range(2, len(c)):
                     lk = c[k]
                     if lk not in self.m or self.m[lk]:
                         j = k
                         break
 
-                if j:
+                if j >= 0:
                     if c[j] not in self.watched:
                         self.watched[c[j]] = set()
                     self.watched[c[j]].add(c)
@@ -266,31 +313,32 @@ class CDCL:
         return None
     
     
-    def branch(self, free):
+    cdef Literal branch(self, list free):
         """Choose a random free variable and a polarity to branch on"""
+        cdef:
+            int x
         # x = self.branching_heuristics.pick(free)
         x = choice(free)
         # return Literal(free[0])
         return Literal(choice([-1,1]) * x)
 
 
-    def free_vars(self):
+    cdef list free_vars(self):
         """Return the list of free variables (those that are not in model m)"""
         return [x for x in self.xs if not self.m.has_var(x)]
     
 
-    def should_restart(self):
+    cdef bint should_restart(self):
         """Check if we should restart search"""
         return self.conflict_count >= self.restart_counter[1] * RESTART_MULTIPLIER
     
-    def reluctant_doubling(self):
+    cdef reluctant_doubling(self):
         u, v = self.restart_counter
         self.restart_counter = (u+1,1) if (u & -u == v) else (u,2*v)
     
 
-    def restart(self):
+    cdef restart(self):
         """Restart search"""
-        # print("Restart after {} conflicts. Learned {} clauses".format(self.conflict_count, len(self.learned)))
         self.INFO(lambda: "Restart after {} conflicts\n\n\n".format(self.conflict_count), 0)
         self.INFO(lambda: self.m, 0)
         uv = self.m.undo(0)
@@ -302,17 +350,23 @@ class CDCL:
         if len(self.learned) > self.learning_limit:
             self.forget()
 
-    def forget(self):
-        num_keep = self.learning_limit * 2 // 3
+    cdef forget(self):
+        cdef:
+            int num_keep, num_forget
+            list to_forget
+            Clause c
+            int i
+            Literal l
+
+        num_keep = self.learning_limit // 2
         num_forget = len(self.learned) - num_keep
         to_forget = sample(self.learned, k=num_forget)
-        print("Learned {} out of {} allowed, keep {}".format(len(self.learned), self.learning_limit, num_keep))
+        self.INFO(lambda: "Learned {} out of {} allowed, keep {}".format(len(self.learned), self.learning_limit, num_keep))
         for c in to_forget:
             for i in range(2):
                 l = c[i]
                 self.watched[l].remove(c)
             self.learned.remove(c)
-        
 
 
     def uip_fast(self, conflict):
@@ -394,10 +448,11 @@ class CDCL:
         return learned, only_true
     
 
-    def analyze(self, conflict):
+    def analyze(self, Clause conflict):
         """Analyze the conflict and return the level to which to backtrack"""
-    
-        # learned, only_true = self.uip(conflict)
+        cdef:
+            Clause learned
+            Literal only_true
         learned, only_true = self.uip_fast(conflict)
         i = learned.index(only_true)
         
@@ -431,20 +486,23 @@ class CDCL:
         return str(self)
 
 
-class Model:
+cdef class Model:
+    cdef readonly:
+        dict alpha, at_level
+        set dv
 
     def __init__(self):
         self.alpha = dict()
-        self.at_level = defaultdict(list)
+        self.at_level = dict()
         self.dv = set()
     
     def has_var(self, x):
         return x in self.alpha
         
-    def __contains__(self, l):
+    def __contains__(self, Literal l):
         return l.var in self.alpha
     
-    def __getitem__(self, l):
+    def __getitem__(self, Literal l):
         """Return the truth value of literal l under this model"""
         return l.is_neg ^ self.alpha[l.var][0]
 
@@ -452,36 +510,42 @@ class Model:
         return len(self.alpha)
     
 
-    def predecessor(self, l):
+    cdef Clause predecessor(self, Literal l):
         _, _, reason = self.alpha[l.var]
         return reason
     
 
-    def level_of(self, l):
+    cdef int level_of(self, Literal l):
         _, dl, _ = self.alpha[l.var]
         return dl
 
 
-    def commit(self, l, dl, reason):
+    cdef commit(self, Literal l, dl, reason):
         """Set literal l to True at level dl according to the given reason clause"""
         x = l.var
         assert(x != 0)
         self.alpha[x] = (l.is_pos, dl, reason)
+        if dl not in self.at_level:
+            self.at_level[dl] = list()
         self.at_level[dl].append(x)
         if reason:
             assert(l in reason)
     
 
-    def assign(self, l, dl):
+    cdef assign(self, Literal l, dl):
         """Mark v as decision variable, and guess it's True"""
         self.commit(l, dl, None)
         self.dv.add(l.var)
         
     
-    def undo(self, beta):
+    cdef list undo(self, int beta):
         """Undo assignments at level > beta"""
-        levels = [level for level in self.at_level if level > beta]
+        cdef:
+            list unassigned, levels
+            int lvl, x
+
         unassigned = list()
+        levels = [level for level in self.at_level if level > beta]
         for lvl in levels:
             for x in self.at_level[lvl]:
                 if x in self.dv:
@@ -503,134 +567,3 @@ class Model:
     
     def __repr__(self):
         return str(self)
-
-
-class Clause:
-
-    def __init__(self, ls):
-        global clause_counter
-        self.id = clause_counter
-        clause_counter += 1
-
-        self.ls = [l for l in ls]
-        self.singleton = len(self.ls) == 1
-        # assume non-triviality
-        self.trivial = False
-
-    @classmethod
-    def from_ns(cls, ns):
-        """ns - a list of integers representing literals"""
-
-        ls = set()
-        trivial = False
-        for n in ns:
-            l = Literal(n)
-            ls.add(l)
-            # check if both n and -n are present
-            if -l in ls:
-                trivial = True
-
-        c = cls(ls)
-        c.trivial = trivial
-        return c
-    
-    def resolve(self, other, on):
-        ls = set()
-        for l in self.ls:
-            if l.var != on:
-                ls.add(l)
-        for l in other.ls:
-            if l.var != on:
-                ls.add(l)
-        return Clause(ls)
-    
-    def equiv(self, other):
-        return len(self) == len(other) and all([l in other for l in self])
-    
-    
-    def has_var(self, x):
-        l = Literal(x)
-        return l in self.ls or -l in self.ls
-    
-    def xs(self):
-        return (l.var for l in self.ls)
-    
-    def start_watching(self):
-        res = list()
-        for l in self.ls:
-            res.append(l)
-            if len(res) == 2:
-                break
-        assert(len(res) == 2)
-        return res
-    
-    def get_only(self):
-        assert(len(self.ls) == 1)
-        return self.ls[0]
-
-    def index(self, l):
-        return self.ls.index(l)
-    
-    def __len__(self):
-        return len(self.ls)
-    
-    def __iter__(self):
-        return iter(self.ls)
-    
-    def __eq__(self, other):
-        return self.id == other.id
-    
-    def __lt__(self, other):
-        return self.id < other.id
-    
-    def __hash__(self):
-        return self.id
-
-    def __getitem__(self, i):
-        return self.ls[i]
-    
-    def __setitem__(self, i, l):
-        self.ls[i] = l
-    
-    def modeled_by(self, m):
-        """Determine if clause c can be modeled by m"""
-        # m can always model clause c if c contains free vars not captured by m
-        return any(l not in m or m[l] for l in self.ls)
-    
-    def modeled_by_modulo(self, m, v):
-        """Determine if clause c could be modeled by m if variable v were absent"""
-        return any(l not in m or m[l] for l in self.ls if l.var != v)
-
-    def __str__(self):
-        return repr(self)
-    
-    def __repr__(self):
-        return repr(self.ls)
-
-
-
-class Literal:
-    
-    def __init__(self, n):
-        self.n = n
-        self.var = abs(n)
-        self.is_pos = n > 0
-        self.is_neg = n < 0
-    
-    def __neg__(self):
-        return Literal(-self.n)
-
-    def __str__(self):
-        return str(self.n)
-    
-    def __repr__(self):
-        return str(self.n)
-    
-    def __eq__(self, other):
-        return self.n == other.n
-    
-    def __lt__(self, other):
-        return self.var < other.var and self.is_neg < other.is_neg
-    
-    def __hash__(self):
-        return self.n

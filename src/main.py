@@ -3,7 +3,7 @@
 import argparse
 import cProfile, pstats, io
 from pstats import SortKey
-from dpll import CDCL
+from cdcl import CDCL
 
 
 def parseArg():

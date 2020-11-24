@@ -16,7 +16,7 @@ if [ $sat_files != "-" ]; then
       let "s+=1"
       f="../../$bench_dir/sat/$i"
       "$prog" "$f" > results 2>&1
-      cat results
+      # cat results
       if [ $? -eq 0 ]; then
         if (grep -q "[^n]sat" results) || (grep -q "^sat" results); then
           echo "Pass!" 

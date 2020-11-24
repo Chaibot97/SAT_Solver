@@ -8,6 +8,6 @@ setup(
     ext_modules = cythonize([
         "src/components.pyx"
         , "src/branching.pyx"
-        , "src/dpll.pyx"
+        , "src/cdcl.pyx"
         ])
 )
