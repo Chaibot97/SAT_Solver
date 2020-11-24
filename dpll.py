@@ -1,9 +1,10 @@
 # cython: language_level=3
 # cython: profile=False
 
+import logging as logging
 from collections import defaultdict, deque, Counter
 from random import choice, seed
-import logging as logging
+from branching import ERMA
 
 LEVEL = logging.INFO
 
@@ -23,25 +24,27 @@ def DEBUG(dl, msg):
 class CDCL:
     def __init__(self, n_vars, nss, log_file="log"):
         logging.basicConfig(level=LEVEL, filemode='w', filename=log_file, format='%(message)s')
-        self.xs = set()
+        self.xs = list()
         self.cs0 = list() # includes trivial clauses
         self.cs = list() # non-trivial clauses
         self.watched = dict() # map literal l to clauses that are watching l
         self.assertions = list() # literals to be assigned true
         self.conflict_count = 0
+        self.learned_clause = 0
 
         # restart using Knuth's reluctant doubleing sequence
         self.restart_counter = (1, 1)
         self.reluctant_doubling = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
         
         # decision levels:
-        #   -2 :: assertions of singleton clauses
-        #   -1 :: assertions of literals learned during pre-processing
+        #   -2 :: assertions of singleton clauses and implied literals in pre-processing stage
+        #   -1 :: decision level for pre-processing stage
         #  > 0 :: normal decisions
         self.m = Model()
         self.sat = False
         self.dl = -2
         
+        xs_set = set()
         # process clauses and variables
         for ns in nss:
             c = Clause.from_ns(ns)
@@ -52,11 +55,23 @@ class CDCL:
                 else:
                     self.cs.append(c)
                     for x in c.xs():
-                        self.xs.add(x)
+                        if x not in xs_set:
+                            xs_set.add(x)
+                            self.xs.append(x)
+        
+        self.branching_heuristics = ERMA(self.xs)
 
+        self.n_iter = 0
         self.sat = self.preprocess()
+
         if self.sat:
             self.sat = self.run()
+        
+        stats = []
+        stats.append("Statistics")
+        stats.append("Pre-propcessing iterations: %d" % self.n_iter)
+        stats.append("Learned clauses: %d" % self.learned_clause)
+        INFO(0, "\n".join(stats))
     
 
     def preprocess(self):
@@ -73,8 +88,10 @@ class CDCL:
         
         # try both polarities of each variable
         self.dl = -1
-        fixpoint = 2
+        fixpoint = 2 # needs 2 iterations to detect fixpoint
         while fixpoint > 0:
+            # if self.n_iter > 10:
+                # break
             for x in self.xs:
                 if x in self.m.alpha:
                     continue
@@ -84,7 +101,8 @@ class CDCL:
                 INFO(self.dl, "Try {}".format(pos))
                 self.assertions.append( (pos, None) )
                 conflict = self.unit_prop()
-                self.m.undo(-2)
+                uv = self.m.undo(-2)
+                self.branching_heuristics.on_unassign(uv)
                 
                 # pos bad ==> assert neg
                 if conflict:
@@ -102,7 +120,8 @@ class CDCL:
                     INFO(self.dl, "pos ok ==> try neg")
                     self.assertions.append( (neg, None) )
                     conflict = self.unit_prop()
-                    self.m.undo(-2)
+                    uv = self.m.undo(-2)
+                    self.branching_heuristics.on_unassign(uv)
 
                     # neg bad ==> assert pos
                     if conflict:
@@ -118,6 +137,7 @@ class CDCL:
                 DEBUG(self.dl, "")
             fixpoint -= 1
             INFO(self.dl, "fixpoint={}".format(fixpoint))
+            self.n_iter += 1
         return True
 
 
@@ -144,8 +164,10 @@ class CDCL:
                 else:
                     INFO(self.dl, "Backtrack to level {}".format(beta))
                     self.cs.append(learned)
+                    self.learned_clause += 1
                     # assert(self.m[only_true])
-                    self.m.undo(beta)
+                    uv = self.m.undo(beta)
+                    self.branching_heuristics.on_unassign(uv)
                     self.dl = beta
                     INFO(self.dl, "Assert {}".format(only_true))
                     self.assertions.append( (only_true, learned) )
@@ -195,6 +217,8 @@ class CDCL:
             else: # guessed
                 self.m.assign(l, dl)
                 INFO(self.dl, "{:>3}  @  {}  ----------d----------".format(str(l), self.dl))
+            
+            self.branching_heuristics.on_assign(l.var)
 
             if -l not in self.watched:
                 continue # nothing is watching -l
@@ -239,8 +263,10 @@ class CDCL:
     
     def branch(self, free):
         """Choose a random free variable and a polarity to branch on"""
+        # x = self.branching_heuristics.pick(free)
+        x = choice(free)
         # return Literal(free[0])
-        return Literal(choice([-1,1]) * choice(free))
+        return Literal(choice([-1,1]) * x)
 
 
     def free_vars(self):
@@ -257,7 +283,8 @@ class CDCL:
         """Restart search"""
         INFO(0, "Restart after {} conflicts\n\n\n".format(self.conflict_count))
         INFO(0, self.m)
-        self.m.undo(0)
+        uv = self.m.undo(0)
+        self.branching_heuristics.on_unassign(uv)
         self.dl = 1
         self.assertions = list()
         self.restart_counter = self.reluctant_doubling(*self.restart_counter)
@@ -430,17 +457,15 @@ class Model:
     def undo(self, beta):
         """Undo assignments at level > beta"""
         levels = [level for level in self.at_level if level > beta]
-        rem_branch = None
+        unassigned = list()
         for lvl in levels:
             for x in self.at_level[lvl]:
                 if x in self.dv:
                     self.dv.remove(x)
-                    if lvl == beta + 1:
-                        sign = not self.alpha[x][0]
-                        rem_branch = Literal(x) if sign else Literal(-x)
                 del(self.alpha[x])
+                unassigned.append(x)
             del(self.at_level[lvl])
-        return rem_branch
+        return unassigned
     
     def __str__(self):
         is_dv = lambda x: "d" if x in self.dv else ""
