@@ -3,9 +3,10 @@
 
 import logging as logging
 from collections import defaultdict, deque, Counter
-from random import choice, seed
-from branching import ERMA
+from random import choice, seed, sample
 from copy import copy
+from itertools import chain
+from branching import ERMA
 
 # seed(10)
 
@@ -36,14 +37,13 @@ class CDCL:
         self.xs = list()
         self.cs0 = list() # includes trivial clauses
         self.cs = list() # non-trivial clauses
+        self.learned = set()
         self.watched = dict() # map literal l to clauses that are watching l
         self.assertions = list() # literals to be assigned true
         self.conflict_count = 0
-        self.learned_clause = 0
 
         # restart using Knuth's reluctant doubleing sequence
         self.restart_counter = (1, 1)
-        self.reluctant_doubling = lambda u,v: (u+1,1) if (u & -u == v) else (u,2*v)
         
         # decision levels:
         #   -2 :: assertions of singleton clauses and implied literals in pre-processing stage
@@ -68,6 +68,8 @@ class CDCL:
                             xs_set.add(x)
                             self.xs.append(x)
         
+        self.learning_limit = max(len(self.cs) // 3, 100)
+        
         self.branching_heuristics = ERMA(self.xs)
 
         self.n_iter = 0
@@ -79,7 +81,7 @@ class CDCL:
         stats = []
         stats.append("Statistics")
         stats.append("Pre-propcessing iterations: %d" % self.n_iter)
-        stats.append("Learned clauses: %d" % self.learned_clause)
+        stats.append("Learned clauses: %d" % len(self.learned))
         self.INFO("\n".join(stats), 0)
     
 
@@ -89,8 +91,8 @@ class CDCL:
         for c in self.cs:
             for l in c.start_watching():
                 if l not in self.watched:
-                    self.watched[l] = list()
-                self.watched[l].append(c)
+                    self.watched[l] = set()
+                self.watched[l].add(c)
 
         if self.unit_prop():
             return False
@@ -173,8 +175,9 @@ class CDCL:
                     return None
                 else:
                     self.INFO(lambda: "Backtrack to level {}".format(beta))
-                    self.cs.append(learned)
-                    self.learned_clause += 1
+                    if not learned.singleton:
+                        self.learned.add(learned)
+                    self.branching_heuristics.after_conflict(learned, conflict)
                     # assert(self.m[only_true])
                     uv = self.m.undo(beta)
                     self.branching_heuristics.on_unassign(uv)
@@ -233,7 +236,7 @@ class CDCL:
             if -l not in self.watched:
                 continue # nothing is watching -l
             
-            watched_new = list() # unit clauses
+            watched_new = set() # unit clauses
             for c in self.watched[-l]:
                 
                 # clause c looks for a substitute literal to watch
@@ -247,14 +250,14 @@ class CDCL:
 
                 if j:
                     if c[j] not in self.watched:
-                        self.watched[c[j]] = list()
-                    self.watched[c[j]].append(c)
+                        self.watched[c[j]] = set()
+                    self.watched[c[j]].add(c)
                     c[i], c[j] = c[j], c[i]
                     
                 
                 # clause c becomes unit, and implies the only remaining watched literal
                 else:
-                    watched_new.append(c) # c still watches -l and the other literal
+                    watched_new.add(c) # c still watches -l and the other literal
                     l_other = c[1 - i]
                     self.assertions.append( (l_other, c) )
 
@@ -280,17 +283,36 @@ class CDCL:
         """Check if we should restart search"""
         return self.conflict_count >= self.restart_counter[1] * RESTART_MULTIPLIER
     
+    def reluctant_doubling(self):
+        u, v = self.restart_counter
+        self.restart_counter = (u+1,1) if (u & -u == v) else (u,2*v)
+    
 
     def restart(self):
         """Restart search"""
+        # print("Restart after {} conflicts. Learned {} clauses".format(self.conflict_count, len(self.learned)))
         self.INFO(lambda: "Restart after {} conflicts\n\n\n".format(self.conflict_count), 0)
         self.INFO(lambda: self.m, 0)
         uv = self.m.undo(0)
         self.branching_heuristics.on_unassign(uv)
         self.dl = 1
         self.assertions = list()
-        self.restart_counter = self.reluctant_doubling(*self.restart_counter)
+        self.reluctant_doubling()
         self.conflict_count = 0
+        if len(self.learned) > self.learning_limit:
+            self.forget()
+
+    def forget(self):
+        num_keep = self.learning_limit * 2 // 3
+        num_forget = len(self.learned) - num_keep
+        to_forget = sample(self.learned, k=num_forget)
+        print("Learned {} out of {} allowed, keep {}".format(len(self.learned), self.learning_limit, num_keep))
+        for c in to_forget:
+            for i in range(2):
+                l = c[i]
+                self.watched[l].remove(c)
+            self.learned.remove(c)
+        
 
 
     def uip_fast(self, conflict):
@@ -382,7 +404,6 @@ class CDCL:
         if learned.singleton:
             beta = self.dl - 1
         else:
-            self.cs.append(learned)
             # only one literal is true after backjump
             # put that literal at index 0
             learned[0], learned[i] = learned[i], learned[0]
@@ -390,8 +411,8 @@ class CDCL:
             for i in range(2):
                 l = learned[i]
                 if l not in self.watched:
-                    self.watched[l] = list()
-                self.watched[l].append(learned)
+                    self.watched[l] = set()
+                self.watched[l].add(learned)
             beta = max(0, max([self.m.level_of(l) for l in learned if l != only_true]))
         return beta, only_true, learned
 
@@ -485,8 +506,6 @@ class Model:
 
 
 class Clause:
-
-    counter = 0
 
     def __init__(self, ls):
         global clause_counter
