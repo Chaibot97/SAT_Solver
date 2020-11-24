@@ -5,25 +5,34 @@ import logging as logging
 from collections import defaultdict, deque, Counter
 from random import choice, seed
 from branching import ERMA
+from copy import copy
 
-LEVEL = logging.INFO
-
-seed(10)
+# seed(10)
 
 RESTART_MULTIPLIER = 1
 
 clause_counter = 0
 
-def INFO(dl, msg):
-    logging.info('  ' * max(0,dl) + str(msg))
-
-def DEBUG(dl, msg):
-    logging.debug('  ' * max(0,dl) + str(msg).replace('\n', '\n' + '  ' * dl))
-
 
 class CDCL:
-    def __init__(self, n_vars, nss, log_file="log"):
-        logging.basicConfig(level=LEVEL, filemode='w', filename=log_file, format='%(message)s')
+
+    def INFO(self, msg, dl=None):
+        if self.log_level > logging.INFO: return
+        if dl is None:
+            dl = self.dl
+        logging.info('  ' * max(0,dl) + str(msg()))
+    
+    def DEBUG(self, msg, dl=None):
+        if self.log_level > logging.DEBUG: return
+        if dl is None:
+            dl = self.dl
+        logging.debug('  ' * max(0,dl) + str(msg()).replace('\n', '\n' + '  ' * dl))
+    
+
+    def __init__(self, n_vars, nss, log_file="log", log_level=logging.WARN):
+        logging.basicConfig(level=log_level, filemode='w', filename=log_file, format='%(message)s')
+        self.log_level = log_level
+
         self.xs = list()
         self.cs0 = list() # includes trivial clauses
         self.cs = list() # non-trivial clauses
@@ -71,7 +80,7 @@ class CDCL:
         stats.append("Statistics")
         stats.append("Pre-propcessing iterations: %d" % self.n_iter)
         stats.append("Learned clauses: %d" % self.learned_clause)
-        INFO(0, "\n".join(stats))
+        self.INFO("\n".join(stats), 0)
     
 
     def preprocess(self):
@@ -98,7 +107,7 @@ class CDCL:
                 pos, neg = Literal(x), Literal(-x)
                 
                 # try pos
-                INFO(self.dl, "Try {}".format(pos))
+                self.INFO(lambda: "Try {}".format(pos))
                 self.assertions.append( (pos, None) )
                 conflict = self.unit_prop()
                 uv = self.m.undo(-2)
@@ -107,17 +116,17 @@ class CDCL:
                 # pos bad ==> assert neg
                 if conflict:
                     fixpoint = 2
-                    INFO(self.dl, "pos bad ==> assert neg")
+                    self.INFO(lambda: "pos bad ==> assert neg")
                     self.assertions.append( (neg, Clause([neg]), -2) )
                     # neg also bad
                     conflict = self.unit_prop()
                     if conflict:
-                        INFO(self.dl, "neg also bad")
+                        self.INFO(lambda: "neg also bad")
                         return False
                 
                 # pos good ==> try neg
                 else:
-                    INFO(self.dl, "pos ok ==> try neg")
+                    self.INFO(lambda: "pos ok ==> try neg")
                     self.assertions.append( (neg, None) )
                     conflict = self.unit_prop()
                     uv = self.m.undo(-2)
@@ -126,17 +135,18 @@ class CDCL:
                     # neg bad ==> assert pos
                     if conflict:
                         fixpoint = 2
-                        INFO(self.dl, "neg bad ==> assert pos")
+                        self.INFO(lambda: "neg bad ==> assert pos")
                         self.assertions.append( (pos, Clause([pos]), -2) )
                         assert(not self.unit_prop())
                     # neg good ==> no info
                     else:
-                        INFO(self.dl, "neg ok ==> no info")
+                        pass
+                        self.INFO(lambda: "neg ok ==> no info")
 
-                DEBUG(self.dl, str(self.m))
-                DEBUG(self.dl, "")
+                # DEBUG(self.dl, str(self.m))
+                # DEBUG(self.dl, "")
             fixpoint -= 1
-            INFO(self.dl, "fixpoint={}".format(fixpoint))
+            self.INFO(lambda: "fixpoint={}".format(fixpoint))
             self.n_iter += 1
         return True
 
@@ -154,7 +164,7 @@ class CDCL:
             
             conflict = self.unit_prop()
 
-            DEBUG(self.dl, self.m)
+            # DEBUG(self.dl, self.m)
 
             while conflict:
                 self.conflict_count += 1
@@ -162,18 +172,18 @@ class CDCL:
                 if beta < 0:
                     return None
                 else:
-                    INFO(self.dl, "Backtrack to level {}".format(beta))
+                    self.INFO(lambda: "Backtrack to level {}".format(beta))
                     self.cs.append(learned)
                     self.learned_clause += 1
                     # assert(self.m[only_true])
                     uv = self.m.undo(beta)
                     self.branching_heuristics.on_unassign(uv)
                     self.dl = beta
-                    INFO(self.dl, "Assert {}".format(only_true))
+                    self.INFO(lambda: "Assert {}".format(only_true))
                     self.assertions.append( (only_true, learned) )
                     conflict = self.unit_prop()
 
-                DEBUG(self.dl, self.m)
+                # DEBUG(self.dl, self.m)
 
             if self.should_restart():
                 self.restart()
@@ -213,10 +223,10 @@ class CDCL:
             # update the model
             if reason: # implied
                 self.m.commit(l, dl, reason)
-                INFO(self.dl, "{:>3}  @  {}  {}".format(str(l), self.dl, reason))
+                self.INFO(lambda: "{:>3}  @  {}  {}".format(str(l), self.dl, reason))
             else: # guessed
                 self.m.assign(l, dl)
-                INFO(self.dl, "{:>3}  @  {}  ----------d----------".format(str(l), self.dl))
+                self.INFO(lambda: "{:>3}  @  {}  ----------d----------".format(str(l), self.dl))
             
             self.branching_heuristics.on_assign(l.var)
 
@@ -225,8 +235,6 @@ class CDCL:
             
             watched_new = list() # unit clauses
             for c in self.watched[-l]:
-                
-                DEBUG(self.dl, " {} || {}".format(c, c[:2]))
                 
                 # clause c looks for a substitute literal to watch
                 i = 0 if c[0] == -l else 1
@@ -243,18 +251,12 @@ class CDCL:
                     self.watched[c[j]].append(c)
                     c[i], c[j] = c[j], c[i]
                     
-                    DEBUG(self.dl, c[:2])
                 
                 # clause c becomes unit, and implies the only remaining watched literal
                 else:
                     watched_new.append(c) # c still watches -l and the other literal
                     l_other = c[1 - i]
                     self.assertions.append( (l_other, c) )
-                    
-                    DEBUG(self.dl, "Unit. Pend {}".format(l_other))
-            
-            DEBUG(self.dl, "Pending: " + ' '.join([str(t[1]) for t in self.assertions]))
-            DEBUG(self.dl, self.m)
 
             self.watched[-l] = watched_new
         
@@ -281,8 +283,8 @@ class CDCL:
 
     def restart(self):
         """Restart search"""
-        INFO(0, "Restart after {} conflicts\n\n\n".format(self.conflict_count))
-        INFO(0, self.m)
+        self.INFO(lambda: "Restart after {} conflicts\n\n\n".format(self.conflict_count), 0)
+        self.INFO(lambda: self.m, 0)
         uv = self.m.undo(0)
         self.branching_heuristics.on_unassign(uv)
         self.dl = 1
@@ -326,7 +328,7 @@ class CDCL:
         
         assert(level_count[self.dl] == 1)
         learned = Clause([l for l in frontier if l is not end])
-        INFO(self.dl, "Learned {}".format(clause_str(learned)))
+        self.INFO(lambda: "Learned {}".format(clause_str(learned)))
         only_true = next(filter(lambda l: self.m.level_of(l) == self.dl, learned))
         return learned, only_true
         
@@ -336,7 +338,7 @@ class CDCL:
         frontier, old_frontier = conflict, None
         at_curr_level = lambda l: self.m.level_of(l) == self.dl
         clause_str = lambda c: "[" + ",  ".join(["{}  @{}".format(l, self.m.level_of(l)) for l in c]) + "]"
-        INFO(self.dl, "Conflict frontier {}".format(clause_str(frontier)))
+        self.INFO(lambda: "Conflict frontier {}".format(clause_str(frontier)))
         
         while True:
 
@@ -346,11 +348,12 @@ class CDCL:
                 if reason: # not a decision literal
                     assert(-l in reason)
                     if reason.singleton:
-                        INFO(self.dl, "Trace {} to singleton {}".format(-l, clause_str(reason)))
+                        pass
+                        self.INFO(lambda: "Trace {} to singleton {}".format(-l, clause_str(reason)))
                     else:
-                        INFO(self.dl, "Trace {} to {}".format(-l, clause_str(reason)))
+                        self.INFO(lambda: "Trace {} to {}".format(-l, clause_str(reason)))
                         frontier = frontier.resolve(reason, l.var)
-                        INFO(self.dl, "Resolvent {}".format(clause_str(frontier)))
+                        self.INFO(lambda: "Resolvent {}".format(clause_str(frontier)))
 
             ls_curr = [l for l in frontier if at_curr_level(l)]
             if old_frontier and old_frontier.equiv(frontier) or len(ls_curr) == 1:
@@ -358,14 +361,14 @@ class CDCL:
             old_frontier = frontier
                     
             # if not actual.equiv(expected):
-            #     INFO(self.dl, "expected = {}, actual = {}".format(expected, actual))
+            #     self.INFO(lambda: "expected = {}, actual = {}".format(expected, actual))
             #     assert(False)
         
 
         assert(len(ls_curr) == 1)
         learned = Clause(frontier)
         only_true = ls_curr[0]
-        INFO(self.dl, "Learned {}".format(clause_str(learned)))
+        self.INFO(lambda: "Learned {}".format(clause_str(learned)))
         return learned, only_true
     
 
@@ -545,9 +548,6 @@ class Clause:
     def get_only(self):
         assert(len(self.ls) == 1)
         return self.ls[0]
-
-    # def __contains__(self, l):
-        # return l in self.ls
 
     def index(self, l):
         return self.ls.index(l)
