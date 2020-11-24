@@ -1,5 +1,8 @@
+dir=src
+
 cython:
-	python setup.py build_ext --inplace
+	python setup.py build_ext --build-lib $(dir)
 
 clean:
-	rm -rf dpll.c dpll.*.so
+	(cd $(dir) && rm -rf dpll.c* dpll.html)
+	

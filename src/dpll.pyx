@@ -29,6 +29,7 @@ class CDCL:
         self.watched = dict() # map literal l to clauses that are watching l
         self.assertions = list() # literals to be assigned true
         self.conflict_count = 0
+        self.learned_clause = 0
 
         # restart using Knuth's reluctant doubleing sequence
         self.restart_counter = (1, 1)
@@ -36,7 +37,7 @@ class CDCL:
         
         # decision levels:
         #   -2 :: assertions of singleton clauses
-        #   -1 :: assertions of literals learned during pre-processing
+        #   -1 :: decision level for pre-processing stage
         #  > 0 :: normal decisions
         self.m = Model()
         self.sat = False
@@ -54,9 +55,14 @@ class CDCL:
                     for x in c.xs():
                         self.xs.add(x)
 
+        self.n_iter = 0
         self.sat = self.preprocess()
+        INFO(self.dl, "Number of iterations: ".format(self.n_iter))
+
         if self.sat:
             self.sat = self.run()
+        
+        INFO(0, "Learned clauses: {}".format(self.learned_clause))
     
 
     def preprocess(self):
@@ -73,7 +79,7 @@ class CDCL:
         
         # try both polarities of each variable
         self.dl = -1
-        fixpoint = 2
+        fixpoint = 2 # needs 2 iterations to detect fixpoint
         while fixpoint > 0:
             for x in self.xs:
                 if x in self.m.alpha:
@@ -118,6 +124,7 @@ class CDCL:
                 DEBUG(self.dl, "")
             fixpoint -= 1
             INFO(self.dl, "fixpoint={}".format(fixpoint))
+            self.n_iter += 1
         return True
 
 
@@ -144,6 +151,7 @@ class CDCL:
                 else:
                     INFO(self.dl, "Backtrack to level {}".format(beta))
                     self.cs.append(learned)
+                    self.learned_clause += 1
                     # assert(self.m[only_true])
                     self.m.undo(beta)
                     self.dl = beta
@@ -305,7 +313,6 @@ class CDCL:
         
         
     def uip(self, conflict):
-        cdef Literal l
 
         frontier, old_frontier = conflict, None
         at_curr_level = lambda l: self.m.level_of(l) == self.dl
@@ -379,7 +386,6 @@ class CDCL:
 
     def __repr__(self):
         return str(self)
-
 
 class Model:
 

@@ -5,5 +5,5 @@ Cython.Compiler.Options.annotate = True
 
 
 setup(
-    ext_modules = cythonize("dpll.pyx")
+    ext_modules = cythonize("src/dpll.pyx")
 )

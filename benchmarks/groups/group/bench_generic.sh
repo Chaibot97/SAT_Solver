@@ -3,6 +3,7 @@
 bench_dir=$1
 sat_files=$2
 unsat_files=$3
+prog=../../../src/main.py
 
 START=$(date +%s)
 c=0
@@ -14,7 +15,7 @@ if [ $sat_files != "-" ]; then
       printf "$i "
       let "s+=1"
       f="../../$bench_dir/sat/$i"
-      ./dpll "$f" > results 2>&1
+      "$prog" "$f" > results 2>&1
       # cat results
       if [ $? -eq 0 ]; then
         if (grep -q "[^n]sat" results) || (grep -q "^sat" results); then
@@ -41,7 +42,7 @@ if [ $unsat_files != "-" ]; then
   for i in `cat $unsat_files`; do
       printf "$i "
       f="../../$bench_dir/unsatsat/$i"
-      ./dpll "$f" > results 2>&1
+      "$prog" "$f" > results 2>&1
         let "s+=1"
       if [ $? -eq 0 ]; then
         if grep -q "unsat" results; then
