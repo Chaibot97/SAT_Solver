@@ -496,6 +496,11 @@ class Model:
         return unassigned
     
     def __str__(self):
+        to_lit = lambda x: (1 if self.alpha[x][0] else -1) * x
+        return " ".join(map(str, map(to_lit, self.alpha.keys())))
+
+    
+    def __repr__(self):
         is_dv = lambda x: "d" if x in self.dv else ""
         to_lit = lambda x: (1 if self.alpha[x][0] else -1) * x
         sep = ["-"*5 + "(model)" + "-"*5]
@@ -504,9 +509,6 @@ class Model:
                 for x in sorted(list(self.alpha.keys()))] + sep)
         else:
             return "(empty model)"
-    
-    def __repr__(self):
-        return str(self)
 
 
 class Clause:

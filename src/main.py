@@ -55,5 +55,6 @@ if __name__ == '__main__':
     else:
         if cnf.sat:
             print("sat")
+            print(str(cnf.m))
         else:
             print("unsat")
