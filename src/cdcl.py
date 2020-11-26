@@ -270,7 +270,7 @@ class CDCL:
     
     
     def branch(self, free):
-        """Choose a random free variable and a polarity to branch on"""
+        """Choose a free variable and a polarity to branch on"""
         x = self.branching_heuristics.pick(free)
         sign = self.saved_phase[x]
         if sign == 0: # no previously saved phase
